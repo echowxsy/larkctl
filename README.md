@@ -1,5 +1,10 @@
 # larkctl
 
+[![ci](https://github.com/echowxsy/larkctl/actions/workflows/ci.yml/badge.svg)](https://github.com/echowxsy/larkctl/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/echowxsy/larkctl)](https://github.com/echowxsy/larkctl/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/echowxsy/larkctl.svg)](https://pkg.go.dev/github.com/echowxsy/larkctl)
+[![license](https://img.shields.io/github/license/echowxsy/larkctl)](LICENSE)
+
 Command-line client for Feishu/Lark. Reads and writes documents, wiki, sheets, bitable, drive, whiteboards, IM messages, calendar, mail, and tasks — with per-user OAuth, so every action runs as the logged-in user (not a bot).
 
 Works in two modes through the same commands:

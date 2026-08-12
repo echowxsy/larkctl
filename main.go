@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -22,7 +23,19 @@ import (
 )
 
 // version is injected at build time via -ldflags "-X main.version=<tag>".
+// Builds without the ldflag (e.g. `go install ...@latest`) fall back to the
+// module version Go stamps into the binary.
 var version = "dev"
+
+func effectiveVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return version
+}
 
 var (
 	compactOutput bool
@@ -159,7 +172,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:     "larkctl",
 		Short:   "Enterprise Feishu CLI with per-user auth gateway",
-		Version: version,
+		Version: effectiveVersion(),
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			return resolveGatewayURL(cmd)
 		},
