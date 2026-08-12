@@ -101,7 +101,7 @@ no special syntax needed.
 
 | Scope | Operations |
 |-------|-----------|
-| `im:message.send_as_user` | send, send-file, reply |
+| `im:message` | send, send-file, reply, react, unreact |
 | `im:resource` | send-file (upload) |
 | `contact:user:search` | find |
 | `im:message.group_msg:get_as_user` | list (group chats) |

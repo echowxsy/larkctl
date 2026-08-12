@@ -92,7 +92,7 @@ var scopeGroups = map[string]struct {
 		Scopes: "im:chat im:chat:read im:chat:readonly " +
 			"im:message im:message:readonly " +
 			"im:message.group_msg:get_as_user im:message.p2p_msg:get_as_user " +
-			"im:message.send_as_user im:resource " +
+			"im:resource " +
 			"search:message " +
 			"contact:user.base:readonly contact:user.basic_profile:readonly",
 	},
@@ -2464,7 +2464,7 @@ func newIMCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := requireScopes(cmd.Context(), client, "im:message.send_as_user"); err != nil {
+			if err := requireScopes(cmd.Context(), client, "im:message"); err != nil {
 				return err
 			}
 
@@ -2563,7 +2563,7 @@ func newIMCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := requireScopes(cmd.Context(), client, "im:message.send_as_user im:resource"); err != nil {
+			if err := requireScopes(cmd.Context(), client, "im:message im:resource"); err != nil {
 				return err
 			}
 			to, _ := cmd.Flags().GetString("to")
@@ -2645,7 +2645,7 @@ func newIMCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := requireScopes(cmd.Context(), client, "im:message.send_as_user"); err != nil {
+			if err := requireScopes(cmd.Context(), client, "im:message"); err != nil {
 				return err
 			}
 			data, err := client.ReactMessage(cmd.Context(), args[0], canonicalEmojiType(args[1]))
@@ -2696,7 +2696,7 @@ func newIMCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := requireScopes(cmd.Context(), client, "im:message.send_as_user"); err != nil {
+			if err := requireScopes(cmd.Context(), client, "im:message"); err != nil {
 				return err
 			}
 			data, err := client.DeleteMessageReaction(cmd.Context(), args[0], args[1])
@@ -2833,7 +2833,7 @@ func newIMCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := requireScopes(cmd.Context(), client, "im:message.send_as_user"); err != nil {
+			if err := requireScopes(cmd.Context(), client, "im:message"); err != nil {
 				return err
 			}
 			body := map[string]any{
