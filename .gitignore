@@ -1,0 +1,9 @@
+# Compiled binary
+larkctl
+
+# Legacy
+feishucli
+dist/
+
+# OS
+.DS_Store
