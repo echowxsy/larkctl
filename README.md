@@ -11,7 +11,7 @@ Works in two modes through the same commands:
 
 | Mode | Auth | When to use |
 |------|------|-------------|
-| **Gateway** | Device-code flow against a `larkctl-gateway` server (companion project) | Teams, headless machines, MCP clients; app credentials stay on the gateway |
+| **Gateway** | Device-code flow against a [larkctl-gateway](https://github.com/echowxsy/larkctl-gateway) server | Teams, headless machines, MCP clients; app credentials stay on the gateway |
 | **Local** | OAuth authorization-code flow directly against Feishu | Solo use with your own Feishu app `app_id`/`app_secret` |
 
 ## Features
