@@ -2950,7 +2950,56 @@ func newIMCmd() *cobra.Command {
 	}
 	threadCmd.Flags().Int("limit", 20, "number of messages to return")
 
-	imCmd.AddCommand(sendCmd, sendFileCmd, findCmd, reactCmd, reactionsCmd, unreactCmd, listMsgCmd, searchCmd, replyCmd, chatsCmd, mgetCmd, downloadCmd, threadCmd)
+	listenCmd := &cobra.Command{
+		Use:   "listen",
+		Short: "Stream your Feishu events from the gateway (one JSON line per event)",
+		Long: "Holds the gateway's per-user event stream open and prints each Feishu event\n" +
+			"addressed to you (DMs to the bot, group @-mentions you send) as one JSON line\n" +
+			"on stdout. Status messages go to stderr. Gateway mode only.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient(gatewayURL)
+			if err != nil {
+				return err
+			}
+			gc, ok := client.(*GatewayClient)
+			if !ok {
+				return fmt.Errorf("im listen requires gateway mode (local mode has no event stream)")
+			}
+			once, _ := cmd.Flags().GetBool("once")
+			for {
+				superseded := false
+				err := gc.StreamEvents(cmd.Context(), func(event, data string) {
+					switch event {
+					case "ready":
+						fmt.Fprintf(os.Stderr, "listening: %s\n", data)
+					case "superseded":
+						superseded = true
+					default:
+						fmt.Println(data)
+					}
+				})
+				if cmd.Context().Err() != nil {
+					return nil
+				}
+				if superseded {
+					return fmt.Errorf("stream taken over by a newer 'im listen' for this account")
+				}
+				if once {
+					return err
+				}
+				fmt.Fprintf(os.Stderr, "stream ended (%v), reconnecting in 5s...\n", err)
+				select {
+				case <-cmd.Context().Done():
+					return nil
+				case <-time.After(5 * time.Second):
+				}
+			}
+		},
+	}
+	listenCmd.Flags().Bool("once", false, "exit when the stream ends instead of reconnecting")
+
+	imCmd.AddCommand(sendCmd, sendFileCmd, findCmd, reactCmd, reactionsCmd, unreactCmd, listMsgCmd, searchCmd, replyCmd, chatsCmd, mgetCmd, downloadCmd, threadCmd, listenCmd)
 	return imCmd
 }
 

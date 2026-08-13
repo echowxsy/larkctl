@@ -1357,3 +1357,33 @@ func (c *GatewayClient) requestEnvelope(ctx context.Context, method, path string
 
 	return resp.StatusCode, env, nil
 }
+
+// StreamEvents opens the gateway's per-user SSE event stream
+// (/v1/events/stream) and invokes fn for every frame until ctx is canceled
+// or the connection drops. Uses a dedicated no-timeout client: the shared
+// one's 45s deadline would kill a long-lived stream.
+func (c *GatewayClient) StreamEvents(ctx context.Context, fn func(event, data string)) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/events/stream", nil)
+	if err != nil {
+		return err
+	}
+	token := strings.TrimSpace(c.session())
+	if token == "" {
+		return errors.New("missing session token")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("X-Client-Version", ProtocolVersion)
+
+	streamClient := &http.Client{} // no Timeout: stream lives until ctx cancel
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("event stream failed (status=%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return parseSSE(resp.Body, fn)
+}
