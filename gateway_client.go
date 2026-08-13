@@ -1387,3 +1387,14 @@ func (c *GatewayClient) StreamEvents(ctx context.Context, fn func(event, data st
 	}
 	return parseSSE(resp.Body, fn)
 }
+
+// BotReply asks the gateway to post text into chatID as the bot (tenant
+// identity). replyToMessageID, when non-empty, threads under that message.
+func (c *GatewayClient) BotReply(ctx context.Context, chatID, text, replyToMessageID string) error {
+	body := map[string]string{"chat_id": chatID, "text": text}
+	if replyToMessageID != "" {
+		body["reply_to_message_id"] = replyToMessageID
+	}
+	var out any
+	return c.callJSONWithRefresh(ctx, "POST", "/v1/bot/reply", nil, body, &out)
+}

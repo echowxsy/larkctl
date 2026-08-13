@@ -197,6 +197,7 @@ func newRootCmd() *cobra.Command {
 		newCalendarCmd(),
 		newBoardCmd(),
 		newIMCmd(),
+		newAgentCmd(),
 		newMailCmd(),
 		newMCPCmd(),
 		newUpgradeCmd(),
