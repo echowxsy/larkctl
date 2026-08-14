@@ -65,10 +65,10 @@ func TestParseIncomingMessage(t *testing.T) {
 	}
 }
 
-func TestParseIncomingMessageNonText(t *testing.T) {
-	env := strings.Replace(sampleEnvelope, `"message_type":"text"`, `"message_type":"image"`, 1)
+func TestParseIncomingMessageUnsupportedType(t *testing.T) {
+	env := strings.Replace(sampleEnvelope, `"message_type":"text"`, `"message_type":"audio"`, 1)
 	if _, ok := parseIncomingMessage([]byte(env)); ok {
-		t.Fatal("image message should be skipped")
+		t.Fatal("audio message should be skipped")
 	}
 }
 
@@ -98,12 +98,14 @@ func TestBotReplyClient(t *testing.T) {
 
 type fakeRunner struct {
 	calls []struct{ prompt, session string }
+	cwds  []string
 	res   agentResult
 	err   error
 }
 
-func (f *fakeRunner) Run(_ context.Context, prompt, sessionID string) (agentResult, error) {
-	f.calls = append(f.calls, struct{ prompt, session string }{prompt, sessionID})
+func (f *fakeRunner) Run(_ context.Context, req agentRunReq) (agentResult, error) {
+	f.calls = append(f.calls, struct{ prompt, session string }{req.Prompt, req.SessionID})
+	f.cwds = append(f.cwds, req.Cwd)
 	return f.res, f.err
 }
 
@@ -117,16 +119,16 @@ func (f *fakeReplier) BotReply(_ context.Context, chatID, text, replyTo string) 
 func TestAgentHandleMessageRunsAndReplies(t *testing.T) {
 	runner := &fakeRunner{res: agentResult{Text: "done!", SessionID: "sess-new"}}
 	replier := &fakeReplier{}
-	sessions := newAgentSessions()
+	state := newTestAgentState(t)
 
-	agentHandleMessage(context.Background(), runner, replier, sessions,
+	agentHandleMessage(context.Background(), runner, replier, state,
 		incomingMessage{ChatID: "oc_1", MessageID: "om_1", Text: "do the thing"})
 
 	if len(runner.calls) != 1 || runner.calls[0].prompt != "do the thing" || runner.calls[0].session != "" {
 		t.Fatalf("runner calls = %+v", runner.calls)
 	}
-	if sessions.get("oc_1") != "sess-new" {
-		t.Fatalf("session not stored: %q", sessions.get("oc_1"))
+	if state.chat("oc_1").Session != "sess-new" {
+		t.Fatalf("session not stored: %q", state.chat("oc_1").Session)
 	}
 	if len(replier.replies) != 1 || replier.replies[0] != "oc_1|done!" {
 		t.Fatalf("replies = %v", replier.replies)
@@ -136,10 +138,10 @@ func TestAgentHandleMessageRunsAndReplies(t *testing.T) {
 func TestAgentHandleMessageResumesSession(t *testing.T) {
 	runner := &fakeRunner{res: agentResult{Text: "again", SessionID: "sess-1"}}
 	replier := &fakeReplier{}
-	sessions := newAgentSessions()
-	sessions.set("oc_1", "sess-1")
+	state := newTestAgentState(t)
+	state.setSession("oc_1", "sess-1")
 
-	agentHandleMessage(context.Background(), runner, replier, sessions,
+	agentHandleMessage(context.Background(), runner, replier, state,
 		incomingMessage{ChatID: "oc_1", Text: "follow up"})
 
 	if runner.calls[0].session != "sess-1" {
@@ -150,16 +152,16 @@ func TestAgentHandleMessageResumesSession(t *testing.T) {
 func TestAgentHandleMessageNewCommand(t *testing.T) {
 	runner := &fakeRunner{}
 	replier := &fakeReplier{}
-	sessions := newAgentSessions()
-	sessions.set("oc_1", "sess-old")
+	state := newTestAgentState(t)
+	state.setSession("oc_1", "sess-old")
 
-	agentHandleMessage(context.Background(), runner, replier, sessions,
+	agentHandleMessage(context.Background(), runner, replier, state,
 		incomingMessage{ChatID: "oc_1", Text: "/new"})
 
 	if len(runner.calls) != 0 {
 		t.Fatal("/new must not invoke the agent")
 	}
-	if sessions.get("oc_1") != "" {
+	if state.chat("oc_1").Session != "" {
 		t.Fatal("session not cleared")
 	}
 	if len(replier.replies) != 1 {
@@ -170,9 +172,9 @@ func TestAgentHandleMessageNewCommand(t *testing.T) {
 func TestAgentHandleMessageRunError(t *testing.T) {
 	runner := &fakeRunner{err: fmt.Errorf("claude exploded")}
 	replier := &fakeReplier{}
-	sessions := newAgentSessions()
+	state := newTestAgentState(t)
 
-	agentHandleMessage(context.Background(), runner, replier, sessions,
+	agentHandleMessage(context.Background(), runner, replier, state,
 		incomingMessage{ChatID: "oc_1", Text: "hi"})
 
 	if len(replier.replies) != 1 || !strings.Contains(replier.replies[0], "claude exploded") {
