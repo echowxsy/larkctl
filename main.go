@@ -98,6 +98,9 @@ var scopeGroups = map[string]struct {
 	},
 	"board": {
 		Description: "Whiteboards",
+		// board:whiteboard:node:delete is deliberately not requested at login:
+		// apps without that permission enabled would fail the whole authorize
+		// page (error 20027). delete-nodes upgrades the session on demand.
 		Scopes:      "board:whiteboard:node:create board:whiteboard:node:read",
 	},
 	"calendar": {
@@ -3964,7 +3967,68 @@ func newBoardCmd() *cobra.Command {
 		},
 	}
 
+	var clientToken string
+	createNodesCmd := &cobra.Command{
+		Use:   "create-nodes [whiteboard_id_or_url] [json_file_or_-]",
+		Short: "Create nodes on a whiteboard from JSON ({\"nodes\":[...]})",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var body map[string]any
+			if err := readJSONInput(args, 1, &body); err != nil {
+				return err
+			}
+			client, err := authedClient(gatewayURL)
+			if err != nil {
+				return err
+			}
+			if err := requireScopes(cmd.Context(), client, "board:whiteboard:node:create"); err != nil {
+				return err
+			}
+			data, err := client.CreateBoardNodes(cmd.Context(), args[0], body, clientToken)
+			if err != nil {
+				return err
+			}
+			printJSON(data)
+			return nil
+		},
+	}
+	createNodesCmd.Flags().StringVar(&clientToken, "client-token", "", "Idempotency token (min 10 chars) so retries don't duplicate nodes")
+
+	deleteNodesCmd := &cobra.Command{
+		Use:   "delete-nodes [whiteboard_id_or_url] [node_id...]",
+		Short: "Delete nodes from a whiteboard",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient(gatewayURL)
+			if err != nil {
+				return err
+			}
+			if err := requireScopes(cmd.Context(), client, "board:whiteboard:node:delete"); err != nil {
+				return err
+			}
+			ids := args[1:]
+			var data any
+			// batch_delete accepts at most 100 ids per call; pace batches to
+			// avoid the board's internal write rate limit.
+			for i := 0; i < len(ids); i += 100 {
+				if i > 0 {
+					time.Sleep(time.Second)
+				}
+				end := min(i+100, len(ids))
+				var err error
+				data, err = client.DeleteBoardNodes(cmd.Context(), args[0], ids[i:end])
+				if err != nil {
+					return err
+				}
+			}
+			printJSON(data)
+			return nil
+		},
+	}
+
 	boardCmd.AddCommand(nodesCmd)
+	boardCmd.AddCommand(createNodesCmd)
+	boardCmd.AddCommand(deleteNodesCmd)
 	return boardCmd
 }
 

@@ -55,6 +55,19 @@ larkctl wiki node URL_OR_TOKEN                 # Get wiki node info
 larkctl wiki create-node SPACE_ID --title "Page" --type docx --parent NODE_TOKEN
 ```
 
+### Whiteboard
+```bash
+larkctl board nodes WHITEBOARD_ID                      # List all nodes (use as template for create)
+larkctl board create-nodes WHITEBOARD_ID nodes.json    # Create nodes (JSON {"nodes":[...]}, or - for stdin)
+larkctl board create-nodes WHITEBOARD_ID - --client-token my-idem-token-1   # Idempotent create
+larkctl board delete-nodes WHITEBOARD_ID NODE_ID...    # Batch delete (auto-chunks by 100)
+```
+
+The whiteboard token comes from the board URL (`/board/<token>`) or from a doc's
+whiteboard block (`board nodes` on the block token). Node JSON uses the Feishu
+board openapi format — read an existing board with `board nodes` and mirror the
+shape (`id`, `type`, `x`, `y`, `width`, `height`, `text`, `style`, ...).
+
 ## MCP Tools
 
 | Tool | Description |

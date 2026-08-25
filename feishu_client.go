@@ -55,6 +55,8 @@ type FeishuClient interface {
 	ListWikiNodes(ctx context.Context, spaceID, parentNodeToken string) (any, error)
 	CreateWikiNode(ctx context.Context, spaceID string, body any) (any, error)
 	GetBoardNodes(ctx context.Context, whiteboardID string) (any, error)
+	CreateBoardNodes(ctx context.Context, whiteboardID string, body any, clientToken string) (any, error)
+	DeleteBoardNodes(ctx context.Context, whiteboardID string, nodeIDs []string) (any, error)
 	CreateTask(ctx context.Context, body any) (any, error)
 	SearchUsers(ctx context.Context, query string, pageSize int) (any, error)
 	GetCalendarPrimary(ctx context.Context) (any, error)

@@ -230,6 +230,12 @@ func (m *mockClient) CreateWikiNode(ctx context.Context, spaceID string, body an
 func (m *mockClient) GetBoardNodes(ctx context.Context, whiteboardID string) (any, error) {
 	return m.getBoardNodesResp, nil
 }
+func (m *mockClient) CreateBoardNodes(ctx context.Context, whiteboardID string, body any, clientToken string) (any, error) {
+	return nil, nil
+}
+func (m *mockClient) DeleteBoardNodes(ctx context.Context, whiteboardID string, nodeIDs []string) (any, error) {
+	return nil, nil
+}
 func (m *mockClient) CreateTask(ctx context.Context, body any) (any, error) {
 	return m.createTaskResp, nil
 }

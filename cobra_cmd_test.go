@@ -3584,3 +3584,53 @@ func TestBitableViewCmds(t *testing.T) {
 		t.Fatalf("bitable delete-view: %v", err)
 	}
 }
+
+func TestBoardNodeCmds(t *testing.T) {
+	mux := gatewayMux()
+	mux.HandleFunc("/v1/board/nodes/create", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("whiteboard_id") != "wb123" {
+			http.Error(w, "missing whiteboard_id", 400)
+			return
+		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		nodes, _ := body["nodes"].([]any)
+		if len(nodes) != 1 {
+			http.Error(w, "bad body", 400)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"code": "ok", "message": "ok",
+			"data": map[string]any{"ids": []any{"n1"}},
+		})
+	})
+	mux.HandleFunc("/v1/board/nodes/delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("whiteboard_id") != "wb123" {
+			http.Error(w, "missing whiteboard_id", 400)
+			return
+		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		ids, _ := body["ids"].([]any)
+		if len(ids) != 2 {
+			http.Error(w, "bad body", 400)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"code": "ok", "message": "ok",
+			"data": map[string]any{},
+		})
+	})
+	srv := setupGatewayEnv(t, mux)
+	defer srv.Close()
+
+	tmp := t.TempDir()
+	jsonPath := tmp + "/nodes.json"
+	os.WriteFile(jsonPath, []byte(`{"nodes":[{"type":"text_shape","text":{"text":"hi"}}]}`), 0644)
+	if _, err := execCmd(t, "board", "create-nodes", "wb123", jsonPath); err != nil {
+		t.Fatalf("board create-nodes: %v", err)
+	}
+	if _, err := execCmd(t, "board", "delete-nodes", "wb123", "n1", "n2"); err != nil {
+		t.Fatalf("board delete-nodes: %v", err)
+	}
+}

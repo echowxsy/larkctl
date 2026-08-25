@@ -535,6 +535,26 @@ func (c *GatewayClient) GetBoardNodes(ctx context.Context, whiteboardID string) 
 	return out, err
 }
 
+func (c *GatewayClient) CreateBoardNodes(ctx context.Context, whiteboardID string, body any, clientToken string) (any, error) {
+	query := url.Values{}
+	query.Set("whiteboard_id", whiteboardID)
+	if clientToken != "" {
+		query.Set("client_token", clientToken)
+	}
+	var out any
+	err := c.callJSONWithRefresh(ctx, "POST", "/v1/board/nodes/create", query, body, &out)
+	return out, err
+}
+
+func (c *GatewayClient) DeleteBoardNodes(ctx context.Context, whiteboardID string, nodeIDs []string) (any, error) {
+	query := url.Values{}
+	query.Set("whiteboard_id", whiteboardID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "POST", "/v1/board/nodes/delete", query,
+		map[string]any{"ids": nodeIDs}, &out)
+	return out, err
+}
+
 func (c *GatewayClient) CreateTask(ctx context.Context, body any) (any, error) {
 	var out any
 	err := c.callJSONWithRefresh(ctx, "POST", "/v1/tasks/create", nil, body, &out)

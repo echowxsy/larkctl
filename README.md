@@ -85,7 +85,7 @@ larkctl mcp                                       # print the gateway's MCP endp
 | `sheets` | Spreadsheets (read) |
 | `bitable` | Multi-dimensional tables: tables, fields, records, views |
 | `drive` | Drive files: list, upload, download, import/export |
-| `board` | Whiteboard nodes |
+| `board` | Whiteboard nodes: list, create, batch delete |
 | `im` | Messages: send, list, search, reply, reactions, files, find users |
 | `calendar` | Events, free/busy, meeting rooms, RSVP |
 | `mail` | Mailbox: list, read, send, reply, forward, drafts, search |

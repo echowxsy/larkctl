@@ -3836,3 +3836,115 @@ func TestLocal_BitableViewMethods(t *testing.T) {
 		}
 	})
 }
+
+func TestGateway_BoardNodeMethods(t *testing.T) {
+	t.Parallel()
+
+	t.Run("CreateBoardNodes", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/board/nodes/create" || r.Method != http.MethodPost {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			q := r.URL.Query()
+			if q.Get("whiteboard_id") != "wb1" || q.Get("client_token") != "idem-token-1" {
+				t.Fatalf("bad query: %v", q)
+			}
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			if body["nodes"] == nil {
+				t.Fatalf("bad body: %v", body)
+			}
+			w.Write(okEnvelope(map[string]any{"ids": []any{"n1"}}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		body := map[string]any{"nodes": []any{map[string]any{"type": "text_shape"}}}
+		if _, err := c.CreateBoardNodes(context.Background(), "wb1", body, "idem-token-1"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("CreateBoardNodes omits empty client_token", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, has := r.URL.Query()["client_token"]; has {
+				t.Fatalf("client_token should be omitted: %v", r.URL.Query())
+			}
+			w.Write(okEnvelope(map[string]any{"ids": []any{"n1"}}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		if _, err := c.CreateBoardNodes(context.Background(), "wb1", map[string]any{"nodes": []any{}}, ""); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("DeleteBoardNodes", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/board/nodes/delete" || r.Method != http.MethodPost {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			if r.URL.Query().Get("whiteboard_id") != "wb1" {
+				t.Fatalf("bad query: %v", r.URL.Query())
+			}
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			ids, _ := body["ids"].([]any)
+			if len(ids) != 2 || ids[0] != "n1" {
+				t.Fatalf("bad body: %v", body)
+			}
+			w.Write(okEnvelope(map[string]any{}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		if _, err := c.DeleteBoardNodes(context.Background(), "wb1", []string{"n1", "n2"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestLocal_BoardNodeMethods(t *testing.T) {
+	t.Parallel()
+
+	t.Run("CreateBoardNodes", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/board/v1/whiteboards/wb1/nodes" || r.Method != http.MethodPost {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			if r.URL.Query().Get("client_token") != "idem-token-1" {
+				t.Fatalf("missing client_token: %v", r.URL.Query())
+			}
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			if body["nodes"] == nil {
+				t.Fatalf("bad body: %v", body)
+			}
+			w.Write(feishuOK(map[string]any{"ids": []any{"n1"}}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		body := map[string]any{"nodes": []any{map[string]any{"type": "text_shape"}}}
+		if _, err := c.CreateBoardNodes(context.Background(), "wb1", body, "idem-token-1"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("DeleteBoardNodes uses DELETE batch_delete", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/board/v1/whiteboards/wb1/nodes/batch_delete" || r.Method != http.MethodDelete {
+				t.Fatalf("%s %s, want DELETE batch_delete", r.Method, r.URL.Path)
+			}
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			ids, _ := body["ids"].([]any)
+			if len(ids) != 2 || ids[1] != "n2" {
+				t.Fatalf("bad body: %v", body)
+			}
+			w.Write(feishuOK(map[string]any{}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		if _, err := c.DeleteBoardNodes(context.Background(), "wb1", []string{"n1", "n2"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}

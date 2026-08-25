@@ -604,6 +604,23 @@ func (c *LocalClient) GetBoardNodes(ctx context.Context, whiteboardID string) (a
 		"/board/v1/whiteboards/"+mustPathEscape(token)+"/nodes", nil, nil)
 }
 
+func (c *LocalClient) CreateBoardNodes(ctx context.Context, whiteboardID string, body any, clientToken string) (any, error) {
+	token := extractToken(whiteboardID)
+	var query url.Values
+	if clientToken != "" {
+		query = url.Values{"client_token": {clientToken}}
+	}
+	return c.feishuRequest(ctx, http.MethodPost,
+		"/board/v1/whiteboards/"+mustPathEscape(token)+"/nodes", query, body)
+}
+
+func (c *LocalClient) DeleteBoardNodes(ctx context.Context, whiteboardID string, nodeIDs []string) (any, error) {
+	token := extractToken(whiteboardID)
+	return c.feishuRequest(ctx, http.MethodDelete,
+		"/board/v1/whiteboards/"+mustPathEscape(token)+"/nodes/batch_delete", nil,
+		map[string]any{"ids": nodeIDs})
+}
+
 func (c *LocalClient) CreateTask(ctx context.Context, body any) (any, error) {
 	return c.feishuRequest(ctx, http.MethodPost, "/task/v2/tasks", nil, body)
 }
