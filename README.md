@@ -83,7 +83,7 @@ larkctl mcp                                       # print the gateway's MCP endp
 | `docs` | Documents: info, blocks, create, export (pdf/docx/md), update from Markdown (diff-based), comments, permissions, search |
 | `wiki` | Wiki spaces and nodes |
 | `sheets` | Spreadsheets (read) |
-| `bitable` | Multi-dimensional tables: tables, fields, records |
+| `bitable` | Multi-dimensional tables: tables, fields, records, views |
 | `drive` | Drive files: list, upload, download, import/export |
 | `board` | Whiteboard nodes |
 | `im` | Messages: send, list, search, reply, reactions, files, find users |

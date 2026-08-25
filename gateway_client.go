@@ -438,6 +438,54 @@ func (c *GatewayClient) DeleteBitableField(ctx context.Context, appToken, tableI
 	return out, err
 }
 
+func (c *GatewayClient) ListBitableViews(ctx context.Context, appToken, tableID string) (any, error) {
+	query := url.Values{}
+	query.Set("app_token", appToken)
+	query.Set("table_id", tableID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "GET", "/v1/bitable/views", query, nil, &out)
+	return out, err
+}
+
+func (c *GatewayClient) GetBitableView(ctx context.Context, appToken, tableID, viewID string) (any, error) {
+	query := url.Values{}
+	query.Set("app_token", appToken)
+	query.Set("table_id", tableID)
+	query.Set("view_id", viewID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "GET", "/v1/bitable/views/get", query, nil, &out)
+	return out, err
+}
+
+func (c *GatewayClient) CreateBitableView(ctx context.Context, appToken, tableID string, body any) (any, error) {
+	query := url.Values{}
+	query.Set("app_token", appToken)
+	query.Set("table_id", tableID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "POST", "/v1/bitable/views/create", query, body, &out)
+	return out, err
+}
+
+func (c *GatewayClient) UpdateBitableView(ctx context.Context, appToken, tableID, viewID string, body any) (any, error) {
+	query := url.Values{}
+	query.Set("app_token", appToken)
+	query.Set("table_id", tableID)
+	query.Set("view_id", viewID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "POST", "/v1/bitable/views/update", query, body, &out)
+	return out, err
+}
+
+func (c *GatewayClient) DeleteBitableView(ctx context.Context, appToken, tableID, viewID string) (any, error) {
+	query := url.Values{}
+	query.Set("app_token", appToken)
+	query.Set("table_id", tableID)
+	query.Set("view_id", viewID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "POST", "/v1/bitable/views/delete", query, nil, &out)
+	return out, err
+}
+
 func (c *GatewayClient) UpdateSheetValues(ctx context.Context, spreadsheetToken string, body any) (any, error) {
 	query := url.Values{}
 	query.Set("spreadsheet_token", spreadsheetToken)

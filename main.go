@@ -2406,8 +2406,108 @@ Common type codes: 1 text, 2 number, 3 single-select, 4 multi-select, 5 date,
 		},
 	}
 
+	viewsCmd := &cobra.Command{
+		Use:   "views [app_token] [table_id]",
+		Short: "List views of a bitable table",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient(gatewayURL)
+			if err != nil {
+				return err
+			}
+			data, err := client.ListBitableViews(cmd.Context(), args[0], args[1])
+			if err != nil {
+				return err
+			}
+			printOutput(data)
+			return nil
+		},
+	}
+
+	viewCmd := &cobra.Command{
+		Use:   "view [app_token] [table_id] [view_id]",
+		Short: "Get a single view (including its property: filters, sorts, groups)",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient(gatewayURL)
+			if err != nil {
+				return err
+			}
+			data, err := client.GetBitableView(cmd.Context(), args[0], args[1], args[2])
+			if err != nil {
+				return err
+			}
+			printJSON(data)
+			return nil
+		},
+	}
+
+	createViewCmd := &cobra.Command{
+		Use:   "create-view [app_token] [table_id] [view_name]",
+		Short: "Create a view",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient(gatewayURL)
+			if err != nil {
+				return err
+			}
+			viewType, _ := cmd.Flags().GetString("type")
+			body := map[string]any{"view_name": args[2], "view_type": viewType}
+			data, err := client.CreateBitableView(cmd.Context(), args[0], args[1], body)
+			if err != nil {
+				return err
+			}
+			printJSON(data)
+			return nil
+		},
+	}
+	createViewCmd.Flags().String("type", "grid", "view type: grid|kanban|gallery|gantt|form")
+
+	updateViewCmd := &cobra.Command{
+		Use:   "update-view [app_token] [table_id] [view_id] [json_file_or_-]",
+		Short: "Update a view (reads JSON from file or stdin)",
+		Long: `JSON body: {"view_name":"New name","property":{...}}
+property (grid views only) can set filter_info, hidden_fields, etc.`,
+		Args: cobra.RangeArgs(3, 4),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient(gatewayURL)
+			if err != nil {
+				return err
+			}
+			var body any
+			if err := readJSONInput(args, 3, &body); err != nil {
+				return err
+			}
+			data, err := client.UpdateBitableView(cmd.Context(), args[0], args[1], args[2], body)
+			if err != nil {
+				return err
+			}
+			printJSON(data)
+			return nil
+		},
+	}
+
+	deleteViewCmd := &cobra.Command{
+		Use:   "delete-view [app_token] [table_id] [view_id]",
+		Short: "Delete a view",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient(gatewayURL)
+			if err != nil {
+				return err
+			}
+			data, err := client.DeleteBitableView(cmd.Context(), args[0], args[1], args[2])
+			if err != nil {
+				return err
+			}
+			printJSON(data)
+			return nil
+		},
+	}
+
 	bitableCmd.AddCommand(metaCmd, tablesCmd, fieldsCmd, recordsCmd, createRecordCmd, updateRecordCmd,
-		createFieldCmd, updateFieldCmd, deleteFieldCmd)
+		createFieldCmd, updateFieldCmd, deleteFieldCmd,
+		viewsCmd, viewCmd, createViewCmd, updateViewCmd, deleteViewCmd)
 	return bitableCmd
 }
 

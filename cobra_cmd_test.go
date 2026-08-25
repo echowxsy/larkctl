@@ -3503,3 +3503,84 @@ func TestDocsExportMdToFileCmdNew(t *testing.T) {
 		t.Fatalf("expected content, got: %s", string(content))
 	}
 }
+
+func TestBitableViewsCmd(t *testing.T) {
+	mux := gatewayMux()
+	mux.HandleFunc("/v1/bitable/views", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"code": "ok", "message": "ok",
+			"data": map[string]any{"items": []any{map[string]any{"view_id": "vew1", "view_name": "Grid", "view_type": "grid"}}},
+		})
+	})
+	srv := setupGatewayEnv(t, mux)
+	defer srv.Close()
+
+	if _, err := execCmd(t, "bitable", "views", "app123", "tbl1"); err != nil {
+		t.Fatalf("bitable views: %v", err)
+	}
+}
+
+func TestBitableViewCmds(t *testing.T) {
+	mux := gatewayMux()
+	mux.HandleFunc("/v1/bitable/views/get", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("view_id") != "vew1" {
+			http.Error(w, "missing view_id", 400)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"code": "ok", "message": "ok",
+			"data": map[string]any{"view": map[string]any{"view_id": "vew1"}},
+		})
+	})
+	mux.HandleFunc("/v1/bitable/views/create", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["view_name"] != "My Kanban" || body["view_type"] != "kanban" {
+			http.Error(w, "bad body", 400)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"code": "ok", "message": "ok",
+			"data": map[string]any{"view": map[string]any{"view_id": "vew_new"}},
+		})
+	})
+	mux.HandleFunc("/v1/bitable/views/update", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("view_id") != "vew1" {
+			http.Error(w, "missing view_id", 400)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"code": "ok", "message": "ok",
+			"data": map[string]any{"view": map[string]any{"view_id": "vew1"}},
+		})
+	})
+	mux.HandleFunc("/v1/bitable/views/delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("view_id") != "vew1" {
+			http.Error(w, "missing view_id", 400)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"code": "ok", "message": "ok",
+			"data": map[string]any{"deleted": true},
+		})
+	})
+	srv := setupGatewayEnv(t, mux)
+	defer srv.Close()
+
+	if _, err := execCmd(t, "bitable", "view", "app123", "tbl1", "vew1"); err != nil {
+		t.Fatalf("bitable view: %v", err)
+	}
+	if _, err := execCmd(t, "bitable", "create-view", "app123", "tbl1", "My Kanban", "--type", "kanban"); err != nil {
+		t.Fatalf("bitable create-view: %v", err)
+	}
+
+	tmp := t.TempDir()
+	jsonPath := tmp + "/view.json"
+	os.WriteFile(jsonPath, []byte(`{"view_name":"Renamed"}`), 0644)
+	if _, err := execCmd(t, "bitable", "update-view", "app123", "tbl1", "vew1", jsonPath); err != nil {
+		t.Fatalf("bitable update-view: %v", err)
+	}
+	if _, err := execCmd(t, "bitable", "delete-view", "app123", "tbl1", "vew1"); err != nil {
+		t.Fatalf("bitable delete-view: %v", err)
+	}
+}

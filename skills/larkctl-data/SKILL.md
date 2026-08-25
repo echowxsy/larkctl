@@ -35,6 +35,11 @@ larkctl bitable records APP_TOKEN TABLE_ID --filter '...'              # Filter 
 larkctl bitable records APP_TOKEN TABLE_ID --view-id VIEW_ID           # Records from specific view
 larkctl bitable create-record APP_TOKEN TABLE_ID record.json           # Create (JSON from file, or - for stdin)
 larkctl bitable update-record APP_TOKEN TABLE_ID RECORD_ID record.json  # Update
+larkctl bitable views APP_TOKEN TABLE_ID                               # List views
+larkctl bitable view APP_TOKEN TABLE_ID VIEW_ID                        # Get one view (with property: filters/sorts/groups)
+larkctl bitable create-view APP_TOKEN TABLE_ID "Name" --type kanban    # Create view (grid|kanban|gallery|gantt|form)
+larkctl bitable update-view APP_TOKEN TABLE_ID VIEW_ID view.json       # Update (JSON: view_name and/or property)
+larkctl bitable delete-view APP_TOKEN TABLE_ID VIEW_ID                 # Delete view
 ```
 
 **Flags for `bitable records`:**

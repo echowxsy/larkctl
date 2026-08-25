@@ -538,6 +538,36 @@ func (c *LocalClient) DeleteBitableField(ctx context.Context, appToken, tableID,
 		"/bitable/v1/apps/"+mustPathEscape(token)+"/tables/"+mustPathEscape(tableID)+"/fields/"+mustPathEscape(fieldID), nil, nil)
 }
 
+func (c *LocalClient) ListBitableViews(ctx context.Context, appToken, tableID string) (any, error) {
+	token := extractToken(appToken)
+	return c.feishuRequest(ctx, http.MethodGet,
+		"/bitable/v1/apps/"+mustPathEscape(token)+"/tables/"+mustPathEscape(tableID)+"/views", nil, nil)
+}
+
+func (c *LocalClient) GetBitableView(ctx context.Context, appToken, tableID, viewID string) (any, error) {
+	token := extractToken(appToken)
+	return c.feishuRequest(ctx, http.MethodGet,
+		"/bitable/v1/apps/"+mustPathEscape(token)+"/tables/"+mustPathEscape(tableID)+"/views/"+mustPathEscape(viewID), nil, nil)
+}
+
+func (c *LocalClient) CreateBitableView(ctx context.Context, appToken, tableID string, body any) (any, error) {
+	token := extractToken(appToken)
+	return c.feishuRequest(ctx, http.MethodPost,
+		"/bitable/v1/apps/"+mustPathEscape(token)+"/tables/"+mustPathEscape(tableID)+"/views", nil, body)
+}
+
+func (c *LocalClient) UpdateBitableView(ctx context.Context, appToken, tableID, viewID string, body any) (any, error) {
+	token := extractToken(appToken)
+	return c.feishuRequest(ctx, http.MethodPatch,
+		"/bitable/v1/apps/"+mustPathEscape(token)+"/tables/"+mustPathEscape(tableID)+"/views/"+mustPathEscape(viewID), nil, body)
+}
+
+func (c *LocalClient) DeleteBitableView(ctx context.Context, appToken, tableID, viewID string) (any, error) {
+	token := extractToken(appToken)
+	return c.feishuRequest(ctx, http.MethodDelete,
+		"/bitable/v1/apps/"+mustPathEscape(token)+"/tables/"+mustPathEscape(tableID)+"/views/"+mustPathEscape(viewID), nil, nil)
+}
+
 func (c *LocalClient) UpdateSheetValues(ctx context.Context, spreadsheetToken string, body any) (any, error) {
 	token := extractToken(spreadsheetToken)
 	return c.feishuRequest(ctx, http.MethodPut,

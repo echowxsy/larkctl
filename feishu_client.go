@@ -44,6 +44,11 @@ type FeishuClient interface {
 	CreateBitableField(ctx context.Context, appToken, tableID string, body any) (any, error)
 	UpdateBitableField(ctx context.Context, appToken, tableID, fieldID string, body any) (any, error)
 	DeleteBitableField(ctx context.Context, appToken, tableID, fieldID string) (any, error)
+	ListBitableViews(ctx context.Context, appToken, tableID string) (any, error)
+	GetBitableView(ctx context.Context, appToken, tableID, viewID string) (any, error)
+	CreateBitableView(ctx context.Context, appToken, tableID string, body any) (any, error)
+	UpdateBitableView(ctx context.Context, appToken, tableID, viewID string, body any) (any, error)
+	DeleteBitableView(ctx context.Context, appToken, tableID, viewID string) (any, error)
 	UpdateSheetValues(ctx context.Context, spreadsheetToken string, body any) (any, error)
 	AppendSheetValues(ctx context.Context, spreadsheetToken string, body any) (any, error)
 	ListWikiSpaces(ctx context.Context) (any, error)
@@ -73,8 +78,8 @@ type FeishuClient interface {
 	MGetMessages(ctx context.Context, messageIDs []string) (any, error)
 	DownloadMessageResource(ctx context.Context, messageID, fileKey, resourceType string, w io.Writer) error
 	ListThreadMessages(ctx context.Context, threadID string, query url.Values) (any, error)
-	UploadIMImage(ctx context.Context, fileName string, fileReader io.Reader) (string, error)                // returns image_key
-	UploadIMFile(ctx context.Context, fileType, fileName string, fileReader io.Reader) (string, error)       // returns file_key
+	UploadIMImage(ctx context.Context, fileName string, fileReader io.Reader) (string, error)          // returns image_key
+	UploadIMFile(ctx context.Context, fileType, fileName string, fileReader io.Reader) (string, error) // returns file_key
 	ReactMessage(ctx context.Context, messageID, emojiType string) (any, error)
 	ListMessageReactions(ctx context.Context, messageID string, query url.Values) (any, error)
 	DeleteMessageReaction(ctx context.Context, messageID, reactionID string) (any, error)

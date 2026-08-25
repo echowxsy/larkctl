@@ -3660,3 +3660,179 @@ type failWriter struct{}
 func (fw *failWriter) Write(p []byte) (int, error) {
 	return 0, io.ErrClosedPipe
 }
+
+func TestGateway_BitableViewMethods(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ListBitableViews", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/bitable/views" {
+				t.Fatalf("path = %q", r.URL.Path)
+			}
+			q := r.URL.Query()
+			if q.Get("app_token") != "app1" || q.Get("table_id") != "tbl1" {
+				t.Fatalf("bad query: %v", q)
+			}
+			w.Write(okEnvelope(map[string]any{"items": []any{}}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		_, err := c.ListBitableViews(context.Background(), "app1", "tbl1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("GetBitableView", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/bitable/views/get" {
+				t.Fatalf("path = %q", r.URL.Path)
+			}
+			if r.URL.Query().Get("view_id") != "vew1" {
+				t.Fatalf("missing view_id: %v", r.URL.Query())
+			}
+			w.Write(okEnvelope(map[string]any{"view": map[string]any{"view_id": "vew1"}}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		_, err := c.GetBitableView(context.Background(), "app1", "tbl1", "vew1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("CreateBitableView", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/bitable/views/create" || r.Method != http.MethodPost {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			if body["view_name"] != "Kanban" {
+				t.Fatalf("bad body: %v", body)
+			}
+			w.Write(okEnvelope(map[string]any{"view": map[string]any{"view_id": "vew_new"}}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		_, err := c.CreateBitableView(context.Background(), "app1", "tbl1", map[string]any{"view_name": "Kanban", "view_type": "kanban"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("UpdateBitableView", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/bitable/views/update" {
+				t.Fatalf("path = %q", r.URL.Path)
+			}
+			if r.URL.Query().Get("view_id") != "vew1" {
+				t.Fatalf("missing view_id: %v", r.URL.Query())
+			}
+			w.Write(okEnvelope(map[string]any{"view": map[string]any{"view_id": "vew1"}}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		_, err := c.UpdateBitableView(context.Background(), "app1", "tbl1", "vew1", map[string]any{"view_name": "Renamed"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("DeleteBitableView", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/bitable/views/delete" {
+				t.Fatalf("path = %q", r.URL.Path)
+			}
+			if r.URL.Query().Get("view_id") != "vew1" {
+				t.Fatalf("missing view_id: %v", r.URL.Query())
+			}
+			w.Write(okEnvelope(map[string]any{"deleted": true}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		_, err := c.DeleteBitableView(context.Background(), "app1", "tbl1", "vew1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestLocal_BitableViewMethods(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ListBitableViews", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/bitable/v1/apps/app1/tables/tbl1/views" || r.Method != http.MethodGet {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			w.Write(feishuOK(map[string]any{"items": []any{}}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		if _, err := c.ListBitableViews(context.Background(), "app1", "tbl1"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("GetBitableView", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/bitable/v1/apps/app1/tables/tbl1/views/vew1" || r.Method != http.MethodGet {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			w.Write(feishuOK(map[string]any{"view": map[string]any{"view_id": "vew1"}}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		if _, err := c.GetBitableView(context.Background(), "app1", "tbl1", "vew1"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("CreateBitableView", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/bitable/v1/apps/app1/tables/tbl1/views" || r.Method != http.MethodPost {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			if body["view_name"] != "Kanban" {
+				t.Fatalf("bad body: %v", body)
+			}
+			w.Write(feishuOK(map[string]any{"view": map[string]any{"view_id": "vew_new"}}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		if _, err := c.CreateBitableView(context.Background(), "app1", "tbl1", map[string]any{"view_name": "Kanban"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("UpdateBitableView uses PATCH", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/bitable/v1/apps/app1/tables/tbl1/views/vew1" || r.Method != http.MethodPatch {
+				t.Fatalf("%s %s, want PATCH", r.Method, r.URL.Path)
+			}
+			w.Write(feishuOK(map[string]any{"view": map[string]any{"view_id": "vew1"}}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		if _, err := c.UpdateBitableView(context.Background(), "app1", "tbl1", "vew1", map[string]any{"view_name": "Renamed"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("DeleteBitableView", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/bitable/v1/apps/app1/tables/tbl1/views/vew1" || r.Method != http.MethodDelete {
+				t.Fatalf("%s %s, want DELETE", r.Method, r.URL.Path)
+			}
+			w.Write(feishuOK(map[string]any{}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		if _, err := c.DeleteBitableView(context.Background(), "app1", "tbl1", "vew1"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}

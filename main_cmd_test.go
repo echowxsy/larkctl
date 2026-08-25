@@ -197,6 +197,21 @@ func (m *mockClient) UpdateBitableField(ctx context.Context, appToken, tableID, 
 func (m *mockClient) DeleteBitableField(ctx context.Context, appToken, tableID, fieldID string) (any, error) {
 	return m.deleteBitFieldResp, nil
 }
+func (m *mockClient) ListBitableViews(ctx context.Context, appToken, tableID string) (any, error) {
+	return nil, nil
+}
+func (m *mockClient) GetBitableView(ctx context.Context, appToken, tableID, viewID string) (any, error) {
+	return nil, nil
+}
+func (m *mockClient) CreateBitableView(ctx context.Context, appToken, tableID string, body any) (any, error) {
+	return nil, nil
+}
+func (m *mockClient) UpdateBitableView(ctx context.Context, appToken, tableID, viewID string, body any) (any, error) {
+	return nil, nil
+}
+func (m *mockClient) DeleteBitableView(ctx context.Context, appToken, tableID, viewID string) (any, error) {
+	return nil, nil
+}
 func (m *mockClient) UpdateSheetValues(ctx context.Context, spreadsheetToken string, body any) (any, error) {
 	return m.updateSheetResp, nil
 }
