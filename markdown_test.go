@@ -2365,3 +2365,59 @@ var (
 	_ = json.Marshal
 	_ = fmt.Sprintf
 )
+
+func TestRenderElementsMentions(t *testing.T) {
+	tests := []struct {
+		name     string
+		elements []element
+		want     string
+	}{
+		{
+			name: "document mention becomes a link",
+			elements: []element{
+				{TextRun: &textRun{Content: "见 "}},
+				{MentionDoc: &mentionDoc{Token: "tok1", ObjType: 22, Title: "设计稿", URL: "https://xxx.feishu.cn/docx/tok1"}},
+			},
+			want: "见 [设计稿](https://xxx.feishu.cn/docx/tok1)",
+		},
+		{
+			name:     "document mention falls back to the token",
+			elements: []element{{MentionDoc: &mentionDoc{Token: "tok1", URL: "https://x/docx/tok1"}}},
+			want:     "[tok1](https://x/docx/tok1)",
+		},
+		{
+			name:     "document mention without a URL renders bare",
+			elements: []element{{MentionDoc: &mentionDoc{Token: "tok1", Title: "设计稿"}}},
+			want:     "设计稿",
+		},
+		{
+			name:     "user mention renders as @id",
+			elements: []element{{MentionUser: &mentionUser{UserID: "ou_abc"}}},
+			want:     "@ou_abc",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := renderElements(tt.elements); got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMentionsKeepExportAndDiffInSync(t *testing.T) {
+	// A paragraph holding a mention must compare equal to its own markdown
+	// export; otherwise `docs update` would rewrite the block and drop the chip.
+	block := &blockData{
+		BlockID:   "b1",
+		BlockType: btText,
+		Text: &richText{Elements: []element{
+			{TextRun: &textRun{Content: "Owner: "}},
+			{MentionUser: &mentionUser{UserID: "ou_abc"}},
+		}},
+	}
+	comparable := blockComparableContent(block, map[string]*blockData{"b1": block})
+	if comparable != "Owner: @ou_abc" {
+		t.Fatalf("comparable = %q", comparable)
+	}
+}

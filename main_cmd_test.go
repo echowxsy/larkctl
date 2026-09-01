@@ -17,6 +17,14 @@ import (
 
 // ---------- mock client ----------
 
+// uploadedDocsMedia records one UploadDocsMedia call for assertions.
+type uploadedDocsMedia struct {
+	ParentType string
+	ParentNode string
+	FileName   string
+	Size       int64
+}
+
 // mockClient implements FeishuClient for testing pure logic functions.
 type mockClient struct {
 	// Canned responses
@@ -64,23 +72,26 @@ type mockClient struct {
 	exportCreateTicket   string
 	exportStatusResult   exportResult
 	downloadMediaCT      string
+	uploadDocsMediaToken string
+	uploadedDocsMedia    []uploadedDocsMedia
 
 	// Error responses
-	whoAmIErr         error
-	getDocBlocksErr   error
-	createBlocksErr   error
-	deleteBlockErr    error
-	updateBlocksErr   error
-	searchUsersErr    error
-	calendarErr       error
-	listRoomsErr      error
-	freebusyErr       error
-	exportCreateErr   error
-	exportStatusErr   error
-	exportDownloadErr error
-	downloadMediaErr  error
-	getSheetValErr    error
-	getFloatImgErr    error
+	whoAmIErr          error
+	getDocBlocksErr    error
+	createBlocksErr    error
+	deleteBlockErr     error
+	updateBlocksErr    error
+	searchUsersErr     error
+	calendarErr        error
+	listRoomsErr       error
+	freebusyErr        error
+	exportCreateErr    error
+	exportStatusErr    error
+	exportDownloadErr  error
+	uploadDocsMediaErr error
+	downloadMediaErr   error
+	getSheetValErr     error
+	getFloatImgErr     error
 
 	// Tracking
 	createBlocksCalls  []createBlocksCall
@@ -342,6 +353,21 @@ func (m *mockClient) AddTaskToTasklist(ctx context.Context, taskID, tasklistID s
 }
 func (m *mockClient) ManageTasklistMembers(ctx context.Context, tasklistID, action string, members []map[string]any) (any, error) {
 	return nil, nil
+}
+func (m *mockClient) UploadDocsMedia(ctx context.Context, parentType, parentNode, fileName string, fileReader io.Reader, fileSize int64) (string, error) {
+	if m.uploadDocsMediaErr != nil {
+		return "", m.uploadDocsMediaErr
+	}
+	m.uploadedDocsMedia = append(m.uploadedDocsMedia, uploadedDocsMedia{
+		ParentType: parentType,
+		ParentNode: parentNode,
+		FileName:   fileName,
+		Size:       fileSize,
+	})
+	if m.uploadDocsMediaToken != "" {
+		return m.uploadDocsMediaToken, nil
+	}
+	return "media_mock_token", nil
 }
 func (m *mockClient) UploadFile(ctx context.Context, parentToken, fileName string, fileReader io.Reader, fileSize int64) (any, error) {
 	return nil, nil
@@ -2250,4 +2276,382 @@ func TestUpdateAutoChildReportsFailureInsteadOfDroppingContent(t *testing.T) {
 	if err != nil || !consumed {
 		t.Fatalf("successful update: consumed=%v err=%v", consumed, err)
 	}
+}
+
+func TestMediaBlockIDFromCreate(t *testing.T) {
+	tests := []struct {
+		name        string
+		resp        any
+		wantType    int
+		want        string
+		wantCreated string
+		wantErr     bool
+	}{
+		{
+			name:        "image block carries the token itself",
+			resp:        map[string]any{"children": []any{map[string]any{"block_id": "img1", "block_type": 27}}},
+			wantType:    27,
+			want:        "img1",
+			wantCreated: "img1",
+		},
+		{
+			// Feishu answers a file-block request with a view block wrapping it.
+			// The token goes to the inner block, the wrapper is what gets removed.
+			name: "file block is wrapped in a view block",
+			resp: map[string]any{"children": []any{map[string]any{
+				"block_id": "view1", "block_type": 33, "children": []any{"file1"},
+			}}},
+			wantType:    23,
+			want:        "file1",
+			wantCreated: "view1",
+		},
+		{
+			name:     "no children",
+			resp:     map[string]any{"children": []any{}},
+			wantType: 27,
+			wantErr:  true,
+		},
+		{
+			name:     "unexpected block type without children",
+			resp:     map[string]any{"children": []any{map[string]any{"block_id": "x", "block_type": 2}}},
+			wantType: 27,
+			wantErr:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotCreated, gotMedia, err := mediaBlockIDFromCreate(tt.resp, tt.wantType)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %q/%q", gotCreated, gotMedia)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotMedia != tt.want {
+				t.Fatalf("media id = %q, want %q", gotMedia, tt.want)
+			}
+			if gotCreated != tt.wantCreated {
+				t.Fatalf("created id = %q, want %q", gotCreated, tt.wantCreated)
+			}
+		})
+	}
+}
+
+func TestDocMentionObjTypeFromURL(t *testing.T) {
+	tests := []struct {
+		target string
+		want   int
+		isURL  bool
+	}{
+		{"https://xxx.feishu.cn/docx/DOCXTOKEN1234567890abcde", 22, true},
+		{"https://xxx.feishu.cn/wiki/WIKITOKEN1234567890abcde", 16, true},
+		{"https://xxx.feishu.cn/sheets/TOKEN", 3, true},
+		{"https://xxx.feishu.cn/base/TOKEN", 8, true},
+		{"https://xxx.feishu.cn/docs/TOKEN", 1, true},
+		{"https://example.com/whatever", 22, true},
+		{"DOCXTOKEN1234567890abcde", 0, false},
+		{"张三", 0, false},
+	}
+	for _, tt := range tests {
+		got, ok := docMentionObjTypeFromURL(tt.target)
+		if ok != tt.isURL {
+			t.Fatalf("%s: isURL = %v, want %v", tt.target, ok, tt.isURL)
+		}
+		if ok && got != tt.want {
+			t.Fatalf("%s: obj_type = %d, want %d", tt.target, got, tt.want)
+		}
+	}
+}
+
+func TestLooksLikeDocToken(t *testing.T) {
+	tests := map[string]bool{
+		"DOCXTOKEN1234567890abcde":   true,
+		"WIKITOKEN1234567890abcde":   true,
+		"张三":                         false,
+		"Zhang San":                  false,
+		"short":                      false,
+		"has-a-dash-but-long-enough": false,
+	}
+	for target, want := range tests {
+		if got := looksLikeDocToken(target); got != want {
+			t.Fatalf("looksLikeDocToken(%q) = %v, want %v", target, got, want)
+		}
+	}
+}
+
+func TestDocsMentionElement(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("open_id becomes a user mention", func(t *testing.T) {
+		el, err := docsMentionElement(ctx, &mockClient{}, "ou_abc123", 22)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		user, ok := el["mention_user"].(map[string]any)
+		if !ok || user["user_id"] != "ou_abc123" {
+			t.Fatalf("got %v", el)
+		}
+	})
+
+	t.Run("wiki URL keeps obj_type 16", func(t *testing.T) {
+		el, err := docsMentionElement(ctx, &mockClient{}, "https://xxx.feishu.cn/wiki/WIKITOKEN1234567890abcde", 22)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		doc, ok := el["mention_doc"].(map[string]any)
+		if !ok || doc["obj_type"] != 16 || doc["token"] != "WIKITOKEN1234567890abcde" {
+			t.Fatalf("got %v", el)
+		}
+	})
+
+	t.Run("bare token uses the default obj_type", func(t *testing.T) {
+		el, err := docsMentionElement(ctx, &mockClient{}, "DOCXTOKEN1234567890abcde", 22)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		doc := el["mention_doc"].(map[string]any)
+		if doc["obj_type"] != 22 {
+			t.Fatalf("got %v", el)
+		}
+	})
+
+	t.Run("name resolves through the contact search", func(t *testing.T) {
+		m := &mockClient{searchUsersResp: map[string]any{"users": []any{
+			map[string]any{"name": "张三", "open_id": "ou_zhangsan"},
+		}}}
+		el, err := docsMentionElement(ctx, m, "张三", 22)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if el["mention_user"].(map[string]any)["user_id"] != "ou_zhangsan" {
+			t.Fatalf("got %v", el)
+		}
+	})
+
+	t.Run("ambiguous name is refused rather than guessed", func(t *testing.T) {
+		m := &mockClient{searchUsersResp: map[string]any{"users": []any{
+			map[string]any{"name": "张三", "open_id": "ou_a"},
+			map[string]any{"name": "张三", "open_id": "ou_b"},
+		}}}
+		if _, err := docsMentionElement(ctx, m, "张三", 22); err == nil {
+			t.Fatal("expected an error for an ambiguous name")
+		}
+	})
+
+	t.Run("partial match is not accepted as the person", func(t *testing.T) {
+		m := &mockClient{searchUsersResp: map[string]any{"users": []any{
+			map[string]any{"name": "张三丰", "open_id": "ou_a"},
+		}}}
+		if _, err := docsMentionElement(ctx, m, "张三", 22); err == nil {
+			t.Fatal("expected an error when no name matches exactly")
+		}
+	})
+}
+
+func TestResolveDocID(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("plain document id passes through", func(t *testing.T) {
+		got, err := resolveDocID(ctx, &mockClient{}, "DOCXTOKEN1234567890abcde")
+		if err != nil || got != "DOCXTOKEN1234567890abcde" {
+			t.Fatalf("got %q, err %v", got, err)
+		}
+	})
+
+	t.Run("wiki URL resolves to obj_token", func(t *testing.T) {
+		m := &mockClient{getWikiNodeResp: map[string]any{"node": map[string]any{"obj_token": "docx123"}}}
+		got, err := resolveDocID(ctx, m, "https://xxx.feishu.cn/wiki/WIKITOKEN")
+		if err != nil || got != "docx123" {
+			t.Fatalf("got %q, err %v", got, err)
+		}
+	})
+
+	t.Run("wiki node without obj_token is an error", func(t *testing.T) {
+		// Falling through with the wiki token would fail later inside the docx
+		// API with a confusing "resource not found".
+		m := &mockClient{getWikiNodeResp: map[string]any{"node": map[string]any{}}}
+		if _, err := resolveDocID(ctx, m, "https://xxx.feishu.cn/wiki/WIKITOKEN"); err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+}
+
+func TestAddDocsMedia(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pic.png")
+	if err := os.WriteFile(path, []byte("imagebytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &mockClient{
+		createBlocksResp:     map[string]any{"children": []any{map[string]any{"block_id": "img1", "block_type": 27}}},
+		uploadDocsMediaToken: "ft-xyz",
+	}
+	blockID, err := addDocsMedia(context.Background(), m, "doc1", "", -1, path, docsImageKind)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if blockID != "img1" {
+		t.Fatalf("block id = %q, want img1", blockID)
+	}
+
+	if len(m.createBlocksCalls) != 1 {
+		t.Fatalf("create calls = %d", len(m.createBlocksCalls))
+	}
+	created := m.createBlocksCalls[0].body.(map[string]any)
+	child := created["children"].([]any)[0].(map[string]any)
+	if child["block_type"] != 27 {
+		t.Fatalf("created block_type = %v, want 27", child["block_type"])
+	}
+	if created["index"] != -1 {
+		t.Fatalf("index = %v, want -1", created["index"])
+	}
+
+	if len(m.uploadedDocsMedia) != 1 {
+		t.Fatalf("upload calls = %d", len(m.uploadedDocsMedia))
+	}
+	up := m.uploadedDocsMedia[0]
+	if up.ParentType != "docx_image" || up.ParentNode != "img1" || up.FileName != "pic.png" || up.Size != int64(len("imagebytes")) {
+		t.Fatalf("upload call = %+v", up)
+	}
+
+	if len(m.updateBlocksCalls) != 1 {
+		t.Fatalf("update calls = %d", len(m.updateBlocksCalls))
+	}
+	req := m.updateBlocksCalls[0].(map[string]any)["requests"].([]any)[0].(map[string]any)
+	if req["block_id"] != "img1" {
+		t.Fatalf("update block_id = %v", req["block_id"])
+	}
+	if req["replace_image"].(map[string]any)["token"] != "ft-xyz" {
+		t.Fatalf("update body = %v", req)
+	}
+}
+
+func TestAddDocsMediaRejectsDirectory(t *testing.T) {
+	if _, err := addDocsMedia(context.Background(), &mockClient{}, "doc1", "", -1, t.TempDir(), docsFileKind); err == nil {
+		t.Fatal("expected an error for a directory")
+	}
+}
+
+func TestDoDiffUpdateKeepsViewWrappedAttachment(t *testing.T) {
+	// Feishu nests a file block inside a view block, and the markdown export
+	// marks the inner file block. Without mapping it back to its wrapper the
+	// attachment reads as a new block while the wrapper reads as removed.
+	newDoc := func() *mockClient {
+		return &mockClient{
+			getDocBlocksResp: map[string]any{
+				"items": []any{
+					map[string]any{
+						"block_id":   "doc123",
+						"block_type": float64(btPage),
+						"children":   []any{"view1", "txt1"},
+					},
+					map[string]any{
+						"block_id":   "view1",
+						"block_type": float64(btView),
+						"children":   []any{"file1"},
+					},
+					map[string]any{
+						"block_id":   "file1",
+						"block_type": float64(btFile),
+						"file":       map[string]any{"name": "report.pdf", "token": "ft1"},
+					},
+					map[string]any{
+						"block_id":   "txt1",
+						"block_type": float64(2),
+						"text": map[string]any{"elements": []any{
+							map[string]any{"text_run": map[string]any{"content": "hello"}},
+						}},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("unchanged attachment is left alone", func(t *testing.T) {
+		mc := newDoc()
+		entries := []mdBlockEntry{
+			{BlockID: "file1", BlockType: btFile, Comparable: "file:report.pdf\tft1"},
+			{BlockID: "txt1", BlockType: 2, Body: map[string]any{"block_type": 2}, Comparable: "hello"},
+		}
+		if err := doDiffUpdate(context.Background(), mc, "doc123", entries); err != nil {
+			t.Fatalf("doDiffUpdate() error = %v", err)
+		}
+		if len(mc.deleteBlockCalls) != 0 {
+			t.Fatalf("expected no deletes, got %v", mc.deleteBlockCalls)
+		}
+		if len(mc.createBlocksCalls) != 0 {
+			t.Fatalf("expected no creates, got %d", len(mc.createBlocksCalls))
+		}
+	})
+
+	t.Run("dropping the attachment deletes its wrapper", func(t *testing.T) {
+		mc := newDoc()
+		entries := []mdBlockEntry{
+			{BlockID: "txt1", BlockType: 2, Body: map[string]any{"block_type": 2}, Comparable: "hello"},
+		}
+		if err := doDiffUpdate(context.Background(), mc, "doc123", entries); err != nil {
+			t.Fatalf("doDiffUpdate() error = %v", err)
+		}
+		if len(mc.deleteBlockCalls) != 1 || mc.deleteBlockCalls[0].blockID != "view1" {
+			t.Fatalf("expected view1 to be deleted, got %v", mc.deleteBlockCalls)
+		}
+	})
+}
+
+func TestAddDocsMediaRollsBackPlaceholder(t *testing.T) {
+	// A tokenless image/file block renders in Feishu as a broken "failed to
+	// load" placeholder, so a failed upload must not leave one behind.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pic.png")
+	if err := os.WriteFile(path, []byte("imagebytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("upload failure removes the image block", func(t *testing.T) {
+		mc := &mockClient{
+			createBlocksResp:   map[string]any{"children": []any{map[string]any{"block_id": "img1", "block_type": 27}}},
+			uploadDocsMediaErr: fmt.Errorf("upload failed (status=404): 404 page not found"),
+		}
+		_, err := addDocsMedia(context.Background(), mc, "doc1", "", -1, path, docsImageKind)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if len(mc.deleteBlockCalls) != 1 || mc.deleteBlockCalls[0].blockID != "img1" {
+			t.Fatalf("expected img1 to be deleted, got %v", mc.deleteBlockCalls)
+		}
+	})
+
+	t.Run("attachment rollback removes the view wrapper, not the inner block", func(t *testing.T) {
+		mc := &mockClient{
+			createBlocksResp: map[string]any{"children": []any{map[string]any{
+				"block_id": "view1", "block_type": 33, "children": []any{"file1"},
+			}}},
+			uploadDocsMediaErr: fmt.Errorf("boom"),
+		}
+		_, err := addDocsMedia(context.Background(), mc, "doc1", "", -1, path, docsFileKind)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		// Deleting file1 would leave an empty view block behind.
+		if len(mc.deleteBlockCalls) != 1 || mc.deleteBlockCalls[0].blockID != "view1" {
+			t.Fatalf("expected view1 to be deleted, got %v", mc.deleteBlockCalls)
+		}
+	})
+
+	t.Run("patch failure removes the block too", func(t *testing.T) {
+		mc := &mockClient{
+			createBlocksResp: map[string]any{"children": []any{map[string]any{"block_id": "img1", "block_type": 27}}},
+			updateBlocksErr:  fmt.Errorf("boom"),
+		}
+		if _, err := addDocsMedia(context.Background(), mc, "doc1", "", -1, path, docsImageKind); err == nil {
+			t.Fatal("expected an error")
+		}
+		if len(mc.deleteBlockCalls) != 1 || mc.deleteBlockCalls[0].blockID != "img1" {
+			t.Fatalf("expected img1 to be deleted, got %v", mc.deleteBlockCalls)
+		}
+	})
 }

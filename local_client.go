@@ -871,9 +871,9 @@ func (c *LocalClient) DeleteMessageReaction(ctx context.Context, messageID, reac
 		"/im/v1/messages/"+mustPathEscape(messageID)+"/reactions/"+mustPathEscape(reactionID), nil, nil)
 }
 
-// uploadIMResource posts a multipart form to a Feishu IM upload endpoint and
-// returns the named key ("image_key" / "file_key") from the response.
-func (c *LocalClient) uploadIMResource(ctx context.Context, path, keyField string, fill func(*multipart.Writer) error) (string, error) {
+// uploadMultipartResource posts a multipart form to a Feishu upload endpoint and
+// returns the named key ("image_key" / "file_key" / "file_token") from the response.
+func (c *LocalClient) uploadMultipartResource(ctx context.Context, path, keyField string, fill func(*multipart.Writer) error) (string, error) {
 	if err := c.ensureToken(ctx); err != nil {
 		return "", err
 	}
@@ -923,7 +923,7 @@ func (c *LocalClient) uploadIMResource(ctx context.Context, path, keyField strin
 }
 
 func (c *LocalClient) UploadIMImage(ctx context.Context, fileName string, fileReader io.Reader) (string, error) {
-	return c.uploadIMResource(ctx, "/im/v1/images", "image_key", func(mw *multipart.Writer) error {
+	return c.uploadMultipartResource(ctx, "/im/v1/images", "image_key", func(mw *multipart.Writer) error {
 		if err := mw.WriteField("image_type", "message"); err != nil {
 			return err
 		}
@@ -936,8 +936,17 @@ func (c *LocalClient) UploadIMImage(ctx context.Context, fileName string, fileRe
 	})
 }
 
+// UploadDocsMedia uploads a local file as document media bound to an existing
+// image or file block. The returned token is written into that block by the
+// caller via a replace_image / replace_file batch update.
+func (c *LocalClient) UploadDocsMedia(ctx context.Context, parentType, parentNode, fileName string, fileReader io.Reader, fileSize int64) (string, error) {
+	return c.uploadMultipartResource(ctx, "/drive/v1/medias/upload_all", "file_token", func(mw *multipart.Writer) error {
+		return fillDocsMediaForm(mw, parentType, parentNode, fileName, fileReader, fileSize)
+	})
+}
+
 func (c *LocalClient) UploadIMFile(ctx context.Context, fileType, fileName string, fileReader io.Reader) (string, error) {
-	return c.uploadIMResource(ctx, "/im/v1/files", "file_key", func(mw *multipart.Writer) error {
+	return c.uploadMultipartResource(ctx, "/im/v1/files", "file_key", func(mw *multipart.Writer) error {
 		if err := mw.WriteField("file_type", fileType); err != nil {
 			return err
 		}

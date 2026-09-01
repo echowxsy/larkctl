@@ -80,7 +80,7 @@ larkctl mcp                                       # print the gateway's MCP endp
 
 | Command | Description |
 |---------|-------------|
-| `docs` | Documents: info, blocks, create, export (pdf/docx/md), update from Markdown (diff-based), comments, permissions, search |
+| `docs` | Documents: info, blocks, create, export (pdf/docx/md), update from Markdown (diff-based), images/attachments/links/mentions, comments, permissions, search |
 | `wiki` | Wiki spaces and nodes |
 | `sheets` | Spreadsheets (read) |
 | `bitable` | Multi-dimensional tables: tables, fields, records, views |

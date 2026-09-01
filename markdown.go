@@ -155,8 +155,24 @@ type richText struct {
 }
 
 type element struct {
-	TextRun  *textRun  `json:"text_run,omitempty"`
-	Equation *equation `json:"equation,omitempty"`
+	TextRun     *textRun     `json:"text_run,omitempty"`
+	Equation    *equation    `json:"equation,omitempty"`
+	MentionDoc  *mentionDoc  `json:"mention_doc,omitempty"`
+	MentionUser *mentionUser `json:"mention_user,omitempty"`
+}
+
+// mentionDoc is the inline chip Feishu shows for a linked cloud document.
+type mentionDoc struct {
+	Token   string `json:"token"`
+	ObjType int    `json:"obj_type"`
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+}
+
+// mentionUser is the inline @-chip for a person. Feishu returns only the id,
+// never a display name.
+type mentionUser struct {
+	UserID string `json:"user_id"`
 }
 
 type equation struct {
@@ -597,12 +613,40 @@ func getContentRT(b *blockData) *richText {
 	}
 }
 
+// renderMentionDoc renders a document mention as a markdown link.
+func renderMentionDoc(m *mentionDoc) string {
+	title := m.Title
+	if title == "" {
+		title = m.Token
+	}
+	target := m.URL
+	if decoded, err := url.QueryUnescape(target); err == nil {
+		target = decoded
+	}
+	if target == "" {
+		return title
+	}
+	return "[" + title + "](" + target + ")"
+}
+
 func renderElements(elements []element) string {
 	var sb strings.Builder
 	for _, el := range elements {
 		// Inline equation
 		if el.Equation != nil {
 			sb.WriteString("$" + el.Equation.Content + "$")
+			continue
+		}
+		// Mentions have no markdown equivalent. Rendering them as a link (docs)
+		// or an @id (people) keeps them visible on export and keeps the export
+		// and the diff comparable in sync, so an untouched paragraph is not
+		// rewritten — a rewrite would drop the mention.
+		if el.MentionDoc != nil {
+			sb.WriteString(renderMentionDoc(el.MentionDoc))
+			continue
+		}
+		if el.MentionUser != nil {
+			sb.WriteString("@" + el.MentionUser.UserID)
 			continue
 		}
 		if el.TextRun == nil {

@@ -1183,20 +1183,9 @@ Examples:
 				return fmt.Errorf("read markdown: %w", err)
 			}
 
-			// Resolve document ID
-			docID := extractToken(input)
-			if strings.Contains(input, "/wiki/") {
-				data, err := client.GetWikiNode(cmd.Context(), input)
-				if err != nil {
-					return fmt.Errorf("resolve wiki token: %w", err)
-				}
-				if m, ok := data.(map[string]any); ok {
-					if node, ok := m["node"].(map[string]any); ok {
-						if objToken, ok := node["obj_token"].(string); ok {
-							docID = objToken
-						}
-					}
-				}
+			docID, err := resolveDocID(cmd.Context(), client, input)
+			if err != nil {
+				return err
 			}
 
 			// Parse markdown with block ID markers
@@ -1317,7 +1306,8 @@ Examples:
 	filesCmd.Flags().StringVarP(&filesOutputDir, "output-dir", "o", ".", "output directory for downloaded files")
 
 	docsCmd.AddCommand(infoCmd, blocksCmd, createBlocksCmd, deleteBlockCmd, commentsCmd,
-		searchCmd, createCmd, addCommentCmd, replyCommentCmd, resolveCommentCmd, permCmd, exportCmd, updateCmd, filesCmd)
+		searchCmd, createCmd, addCommentCmd, replyCommentCmd, resolveCommentCmd, permCmd, exportCmd, updateCmd, filesCmd,
+		newDocsAddImageCmd(), newDocsAddFileCmd(), newDocsAddLinkCmd(), newDocsAddMentionCmd())
 	return docsCmd
 }
 
@@ -1394,9 +1384,22 @@ func doDiffUpdate(ctx context.Context, client FeishuClient, docID string, entrie
 			break
 		}
 	}
+	// Markdown carries a bid per page child, except for attachments: Feishu
+	// nests the file block (23) inside a view block (33) and the export marks
+	// the inner file block. Map those back to their wrapper, or the attachment
+	// looks like a new block while its wrapper looks unreferenced and is deleted.
 	existingSet := map[string]bool{}
+	wrapperOf := map[string]string{}
 	for _, id := range pageChildren {
 		existingSet[id] = true
+		block := blockMap[id]
+		if block == nil || block.BlockType != btView {
+			continue
+		}
+		for _, childID := range block.Children {
+			existingSet[childID] = true
+			wrapperOf[childID] = id
+		}
 	}
 
 	// Classify entries: update, create, or skip
@@ -1408,6 +1411,9 @@ func doDiffUpdate(ctx context.Context, client FeishuClient, docID string, entrie
 	for _, entry := range entries {
 		if entry.BlockID != "" && existingSet[entry.BlockID] {
 			keepSet[entry.BlockID] = true
+			if wrapper, ok := wrapperOf[entry.BlockID]; ok {
+				keepSet[wrapper] = true
+			}
 			existingType := existingTypes[entry.BlockID]
 			if existingType != entry.BlockType {
 				unsupported = append(unsupported, fmt.Sprintf(
@@ -1448,9 +1454,11 @@ func doDiffUpdate(ctx context.Context, client FeishuClient, docID string, entrie
 		}
 	}
 
+	// Counted over page children: keepSet also holds the inner block of each
+	// view-wrapped attachment, which is not a block of its own at this level.
 	fmt.Fprintf(os.Stderr, "=> Diff: %d update, %d create, %d delete, %d unchanged\n",
 		len(updateReqs), len(toCreate), len(toDelete),
-		len(keepSet)-len(updateReqs))
+		len(pageChildren)-len(toDelete)-len(updateReqs))
 
 	// 1. Batch update changed blocks
 	if len(updateReqs) > 0 {

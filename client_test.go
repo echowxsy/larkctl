@@ -3948,3 +3948,88 @@ func TestLocal_BoardNodeMethods(t *testing.T) {
 		}
 	})
 }
+
+func TestUploadDocsMedia(t *testing.T) {
+	t.Parallel()
+
+	// checkForm asserts the multipart body both clients send for document media.
+	checkForm := func(t *testing.T, r *http.Request, wantParentType string) {
+		t.Helper()
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("parse multipart: %v", err)
+		}
+		if got := r.FormValue("parent_type"); got != wantParentType {
+			t.Fatalf("parent_type = %q, want %q", got, wantParentType)
+		}
+		if got := r.FormValue("parent_node"); got != "blk1" {
+			t.Fatalf("parent_node = %q, want blk1", got)
+		}
+		if got := r.FormValue("file_name"); got != "pic.png" {
+			t.Fatalf("file_name = %q, want pic.png", got)
+		}
+		if got := r.FormValue("size"); got != "5" {
+			t.Fatalf("size = %q, want 5", got)
+		}
+		f, hdr, err := r.FormFile("file")
+		if err != nil {
+			t.Fatalf("form file: %v", err)
+		}
+		defer f.Close()
+		if hdr.Filename != "pic.png" {
+			t.Fatalf("upload filename = %q", hdr.Filename)
+		}
+		body, _ := io.ReadAll(f)
+		if string(body) != "bytes" {
+			t.Fatalf("uploaded body = %q, want bytes", body)
+		}
+	}
+
+	t.Run("gateway", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/docs/media/upload" || r.Method != http.MethodPost {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			checkForm(t, r, "docx_image")
+			w.Write(okEnvelope(map[string]any{"file_token": "ft1"}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		token, err := c.UploadDocsMedia(context.Background(), "docx_image", "blk1", "pic.png", strings.NewReader("bytes"), 5)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if token != "ft1" {
+			t.Fatalf("token = %q, want ft1", token)
+		}
+	})
+
+	t.Run("local", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/drive/v1/medias/upload_all" || r.Method != http.MethodPost {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			checkForm(t, r, "docx_file")
+			w.Write(feishuOK(map[string]any{"file_token": "ft2"}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		token, err := c.UploadDocsMedia(context.Background(), "docx_file", "blk1", "pic.png", strings.NewReader("bytes"), 5)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if token != "ft2" {
+			t.Fatalf("token = %q, want ft2", token)
+		}
+	})
+
+	t.Run("local surfaces a missing file_token", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write(feishuOK(map[string]any{}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		if _, err := c.UploadDocsMedia(context.Background(), "docx_image", "blk1", "pic.png", strings.NewReader("b"), 1); err == nil {
+			t.Fatal("expected an error when the upload returns no file_token")
+		}
+	})
+}

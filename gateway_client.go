@@ -855,9 +855,9 @@ func (c *GatewayClient) DeleteMessageReaction(ctx context.Context, messageID, re
 	return out, err
 }
 
-// uploadIMResource posts a multipart form to a gateway IM upload endpoint and
-// returns the named key ("image_key" / "file_key") from the response.
-func (c *GatewayClient) uploadIMResource(ctx context.Context, path, keyField string, fill func(*multipart.Writer) error) (string, error) {
+// uploadMultipartResource posts a multipart form to a gateway upload endpoint and
+// returns the named key ("image_key" / "file_key" / "file_token") from the response.
+func (c *GatewayClient) uploadMultipartResource(ctx context.Context, path, keyField string, fill func(*multipart.Writer) error) (string, error) {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	if err := fill(mw); err != nil {
@@ -910,7 +910,7 @@ func (c *GatewayClient) uploadIMResource(ctx context.Context, path, keyField str
 }
 
 func (c *GatewayClient) UploadIMImage(ctx context.Context, fileName string, fileReader io.Reader) (string, error) {
-	return c.uploadIMResource(ctx, "/v1/im/images/upload", "image_key", func(mw *multipart.Writer) error {
+	return c.uploadMultipartResource(ctx, "/v1/im/images/upload", "image_key", func(mw *multipart.Writer) error {
 		if err := mw.WriteField("image_type", "message"); err != nil {
 			return err
 		}
@@ -923,8 +923,14 @@ func (c *GatewayClient) UploadIMImage(ctx context.Context, fileName string, file
 	})
 }
 
+func (c *GatewayClient) UploadDocsMedia(ctx context.Context, parentType, parentNode, fileName string, fileReader io.Reader, fileSize int64) (string, error) {
+	return c.uploadMultipartResource(ctx, "/v1/docs/media/upload", "file_token", func(mw *multipart.Writer) error {
+		return fillDocsMediaForm(mw, parentType, parentNode, fileName, fileReader, fileSize)
+	})
+}
+
 func (c *GatewayClient) UploadIMFile(ctx context.Context, fileType, fileName string, fileReader io.Reader) (string, error) {
-	return c.uploadIMResource(ctx, "/v1/im/files/upload", "file_key", func(mw *multipart.Writer) error {
+	return c.uploadMultipartResource(ctx, "/v1/im/files/upload", "file_key", func(mw *multipart.Writer) error {
 		if err := mw.WriteField("file_type", fileType); err != nil {
 			return err
 		}

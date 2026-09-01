@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -3633,4 +3634,222 @@ func TestBoardNodeCmds(t *testing.T) {
 	if _, err := execCmd(t, "board", "delete-nodes", "wb123", "n1", "n2"); err != nil {
 		t.Fatalf("board delete-nodes: %v", err)
 	}
+}
+
+func TestDocsAddMediaCmds(t *testing.T) {
+	type createReq struct {
+		blockID string
+		body    map[string]any
+	}
+	var creates []createReq
+	var uploads []map[string]string
+	var updates []map[string]any
+
+	mux := gatewayMux()
+	mux.HandleFunc("/v1/docs/blocks/create", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		creates = append(creates, createReq{blockID: r.URL.Query().Get("block_id"), body: body})
+
+		child := body["children"].([]any)[0].(map[string]any)
+		var data map[string]any
+		if int(child["block_type"].(float64)) == 23 {
+			// Feishu wraps attachments in a view block.
+			data = map[string]any{"children": []any{map[string]any{
+				"block_id": "view1", "block_type": 33, "children": []any{"file1"},
+			}}}
+		} else {
+			data = map[string]any{"children": []any{map[string]any{
+				"block_id": fmt.Sprintf("img%d", len(creates)), "block_type": 27,
+			}}}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"code": "ok", "message": "ok", "data": data})
+	})
+	mux.HandleFunc("/v1/docs/media/upload", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			http.Error(w, "bad form", 400)
+			return
+		}
+		uploads = append(uploads, map[string]string{
+			"parent_type": r.FormValue("parent_type"),
+			"parent_node": r.FormValue("parent_node"),
+			"file_name":   r.FormValue("file_name"),
+		})
+		json.NewEncoder(w).Encode(map[string]any{
+			"code": "ok", "message": "ok",
+			"data": map[string]any{"file_token": "ft-" + r.FormValue("parent_node")},
+		})
+	})
+	mux.HandleFunc("/v1/docs/blocks/update", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		updates = append(updates, body["requests"].([]any)[0].(map[string]any))
+		json.NewEncoder(w).Encode(map[string]any{"code": "ok", "message": "ok", "data": map[string]any{}})
+	})
+	srv := setupGatewayEnv(t, mux)
+	defer srv.Close()
+
+	tmp := t.TempDir()
+	png := tmp + "/pic.png"
+	if err := os.WriteFile(png, []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	other := tmp + "/second.png"
+	if err := os.WriteFile(other, []byte("png2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	attachment := tmp + "/report.pdf"
+	if err := os.WriteFile(attachment, []byte("pdf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("add-image", func(t *testing.T) {
+		creates, uploads, updates = nil, nil, nil
+		if _, err := execCmd(t, "docs", "add-image", "doc1", png); err != nil {
+			t.Fatalf("docs add-image: %v", err)
+		}
+		if len(uploads) != 1 || uploads[0]["parent_type"] != "docx_image" || uploads[0]["parent_node"] != "img1" {
+			t.Fatalf("uploads = %v", uploads)
+		}
+		if len(updates) != 1 || updates[0]["block_id"] != "img1" {
+			t.Fatalf("updates = %v", updates)
+		}
+		if updates[0]["replace_image"].(map[string]any)["token"] != "ft-img1" {
+			t.Fatalf("update body = %v", updates[0])
+		}
+	})
+
+	t.Run("add-image keeps argument order when --index is given", func(t *testing.T) {
+		creates, uploads, updates = nil, nil, nil
+		if _, err := execCmd(t, "docs", "add-image", "doc1", png, other, "--index", "3"); err != nil {
+			t.Fatalf("docs add-image: %v", err)
+		}
+		if len(creates) != 2 {
+			t.Fatalf("creates = %v", creates)
+		}
+		if creates[0].body["index"] != float64(3) || creates[1].body["index"] != float64(4) {
+			t.Fatalf("indexes = %v, %v; want 3 then 4", creates[0].body["index"], creates[1].body["index"])
+		}
+	})
+
+	t.Run("add-image --block-id targets a nested parent", func(t *testing.T) {
+		creates, uploads, updates = nil, nil, nil
+		if _, err := execCmd(t, "docs", "add-image", "doc1", png, "--block-id", "callout1"); err != nil {
+			t.Fatalf("docs add-image: %v", err)
+		}
+		if len(creates) != 1 || creates[0].blockID != "callout1" {
+			t.Fatalf("creates = %v", creates)
+		}
+	})
+
+	t.Run("add-file writes the token to the inner file block", func(t *testing.T) {
+		creates, uploads, updates = nil, nil, nil
+		if _, err := execCmd(t, "docs", "add-file", "doc1", attachment); err != nil {
+			t.Fatalf("docs add-file: %v", err)
+		}
+		// The create call returns view1; the token belongs to its file1 child.
+		if len(uploads) != 1 || uploads[0]["parent_type"] != "docx_file" || uploads[0]["parent_node"] != "file1" {
+			t.Fatalf("uploads = %v", uploads)
+		}
+		if len(updates) != 1 || updates[0]["block_id"] != "file1" {
+			t.Fatalf("updates = %v", updates)
+		}
+		if updates[0]["replace_file"].(map[string]any)["token"] != "ft-file1" {
+			t.Fatalf("update body = %v", updates[0])
+		}
+	})
+
+	t.Run("add-image reports a missing file", func(t *testing.T) {
+		if _, err := execCmd(t, "docs", "add-image", "doc1", tmp+"/nope.png"); err == nil {
+			t.Fatal("expected an error for a missing file")
+		}
+	})
+}
+
+func TestDocsAddLinkAndMentionCmds(t *testing.T) {
+	var created []map[string]any
+
+	mux := gatewayMux()
+	mux.HandleFunc("/v1/docs/blocks/create", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		created = append(created, body)
+		json.NewEncoder(w).Encode(map[string]any{
+			"code": "ok", "message": "ok",
+			"data": map[string]any{"children": []any{map[string]any{"block_id": "txt1", "block_type": 2}}},
+		})
+	})
+	mux.HandleFunc("/v1/users/search", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"code": "ok", "message": "ok",
+			"data": map[string]any{"users": []any{map[string]any{"name": "张三", "open_id": "ou_zhangsan"}}},
+		})
+	})
+	srv := setupGatewayEnv(t, mux)
+	defer srv.Close()
+
+	elementsOf := func(t *testing.T, body map[string]any) []any {
+		t.Helper()
+		child := body["children"].([]any)[0].(map[string]any)
+		return child["text"].(map[string]any)["elements"].([]any)
+	}
+
+	t.Run("add-link URL-encodes the target", func(t *testing.T) {
+		created = nil
+		if _, err := execCmd(t, "docs", "add-link", "doc1", "https://example.com/a b", "--text", "Spec"); err != nil {
+			t.Fatalf("docs add-link: %v", err)
+		}
+		els := elementsOf(t, created[0])
+		run := els[0].(map[string]any)["text_run"].(map[string]any)
+		if run["content"] != "Spec" {
+			t.Fatalf("content = %v", run["content"])
+		}
+		got := run["text_element_style"].(map[string]any)["link"].(map[string]any)["url"]
+		if got != url.QueryEscape("https://example.com/a b") {
+			t.Fatalf("link url = %v", got)
+		}
+	})
+
+	t.Run("add-link defaults the anchor to the URL", func(t *testing.T) {
+		created = nil
+		if _, err := execCmd(t, "docs", "add-link", "doc1", "https://example.com"); err != nil {
+			t.Fatalf("docs add-link: %v", err)
+		}
+		run := elementsOf(t, created[0])[0].(map[string]any)["text_run"].(map[string]any)
+		if run["content"] != "https://example.com" {
+			t.Fatalf("content = %v", run["content"])
+		}
+	})
+
+	t.Run("add-link rejects an anchor-only target", func(t *testing.T) {
+		if _, err := execCmd(t, "docs", "add-link", "doc1", "#section"); err == nil {
+			t.Fatal("expected an error for an anchor-only link")
+		}
+	})
+
+	t.Run("add-mention mixes prefix text, docs and people", func(t *testing.T) {
+		created = nil
+		_, err := execCmd(t, "docs", "add-mention", "doc1",
+			"https://xxx.feishu.cn/wiki/WIKITOKEN1234567890abcde", "张三", "--text", "Owner: ")
+		if err != nil {
+			t.Fatalf("docs add-mention: %v", err)
+		}
+		els := elementsOf(t, created[0])
+		if len(els) != 4 {
+			t.Fatalf("elements = %v", els)
+		}
+		if els[0].(map[string]any)["text_run"].(map[string]any)["content"] != "Owner: " {
+			t.Fatalf("prefix = %v", els[0])
+		}
+		doc := els[1].(map[string]any)["mention_doc"].(map[string]any)
+		if doc["obj_type"] != float64(16) || doc["token"] != "WIKITOKEN1234567890abcde" {
+			t.Fatalf("mention_doc = %v", doc)
+		}
+		if els[2].(map[string]any)["text_run"].(map[string]any)["content"] != " " {
+			t.Fatalf("separator = %v", els[2])
+		}
+		if els[3].(map[string]any)["mention_user"].(map[string]any)["user_id"] != "ou_zhangsan" {
+			t.Fatalf("mention_user = %v", els[3])
+		}
+	})
 }

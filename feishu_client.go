@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"io"
+	"mime/multipart"
 	"net/url"
+	"strconv"
 )
 
 type exportResult struct {
@@ -95,6 +97,9 @@ type FeishuClient interface {
 	CreateTasklist(ctx context.Context, name string) (any, error)
 	AddTaskToTasklist(ctx context.Context, taskID, tasklistID string) (any, error)
 	ManageTasklistMembers(ctx context.Context, tasklistID, action string, members []map[string]any) (any, error)
+	// Docs media: uploads a local file as document media bound to an existing
+	// image (docx_image) or file (docx_file) block; returns the media file_token.
+	UploadDocsMedia(ctx context.Context, parentType, parentNode, fileName string, fileReader io.Reader, fileSize int64) (string, error)
 	// Drive (extended)
 	UploadFile(ctx context.Context, parentToken, fileName string, fileReader io.Reader, fileSize int64) (any, error)
 	DownloadFile(ctx context.Context, fileToken string, w io.Writer) error
@@ -122,4 +127,27 @@ type FeishuClient interface {
 	ListAccessibleMailboxes(ctx context.Context) (any, error)
 	GetMailSendAs(ctx context.Context) (any, error)
 	GetMailProfile(ctx context.Context) (any, error)
+}
+
+// fillDocsMediaForm writes the multipart form that /drive/v1/medias/upload_all
+// expects for document media. Both clients post the same body — the gateway
+// passes it through untouched — so the field contract lives here once.
+func fillDocsMediaForm(mw *multipart.Writer, parentType, parentNode, fileName string, fileReader io.Reader, fileSize int64) error {
+	fields := [][2]string{
+		{"file_name", fileName},
+		{"parent_type", parentType},
+		{"parent_node", parentNode},
+		{"size", strconv.FormatInt(fileSize, 10)},
+	}
+	for _, f := range fields {
+		if err := mw.WriteField(f[0], f[1]); err != nil {
+			return err
+		}
+	}
+	fw, err := mw.CreateFormFile("file", fileName)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(fw, fileReader)
+	return err
 }

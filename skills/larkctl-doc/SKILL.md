@@ -31,6 +31,25 @@ larkctl docs update DOC_ID doc.md             # Update from markdown file (diff-
 larkctl docs delete-block DOC_ID BLOCK_ID
 ```
 
+### Images, attachments, links and mentions
+```bash
+larkctl docs add-image DOC_ID chart.png a.png b.png    # Upload local images as image blocks
+larkctl docs add-file DOC_ID report.pdf                # Upload local files as attachment blocks
+larkctl docs add-link DOC_ID https://example.com --text "Design spec"
+larkctl docs add-mention DOC_ID https://xxx.feishu.cn/wiki/TOKEN 张三 --text "Owner: "
+```
+
+All four take `--block-id` (nest inside a callout, table cell, ...) and `--index`
+(position among the parent's children, default `-1` = append). Media is capped at
+20MB per file; Feishu sizes image blocks from the image itself.
+
+`add-mention` resolves each target by shape: a cloud-document URL becomes a
+document mention with the obj_type inferred from the path (`/docx/` `/wiki/`
+`/sheets/` `/base/` `/file/` ...), a bare token uses `--obj-type` (default 22,
+docx), `ou_...`/`on_...` becomes a person mention, and anything else is looked up
+as a person's name and must match exactly one (otherwise pass an open_id from
+`larkctl im find`).
+
 ### Export
 ```bash
 larkctl docs export URL_OR_TOKEN --format docx         # Export as docx
@@ -102,6 +121,21 @@ Wiki URLs need extra resolution: wiki token → `wiki/v2/spaces/get_node` → `o
 Some block types fail on `batch_create`:
 - Bullet list (type 16), Ordered list (type 17), Heading3 (type 5) — **will fail**
 - Use text blocks or Heading4 (type 6) instead
+- Link preview cards (type 48) cannot be created at all (`99992402 field validation
+  failed`) — use `docs add-mention` for a document chip, or `docs add-link`
+
+### Media Blocks
+Images and attachments are two-step by design: the block is created empty, the
+bytes are uploaded bound to that block, then the token is patched in. Two details
+bite when doing it by hand with `create-blocks`:
+- Creating a `file` block (23) returns a **view** block (33) wrapping it. The
+  media must be uploaded and patched against the inner file block, not the ID the
+  create call returned.
+- `mention_doc` needs the right `obj_type`: a wiki token sent as 22 (docx) fails
+  with `1770038 resource not found`. Given a correct obj_type the server fills in
+  `title` and `url` by itself.
+
+`docs add-image` / `docs add-file` do all of this.
 
 ### Document Security
 Gateway checks document security levels (L1-L4). L3+ documents are blocked unless user/doc is in the bypass list.
