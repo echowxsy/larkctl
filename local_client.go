@@ -621,6 +621,16 @@ func (c *LocalClient) DeleteBoardNodes(ctx context.Context, whiteboardID string,
 		map[string]any{"ids": nodeIDs})
 }
 
+func (c *LocalClient) GetMindnoteNodes(ctx context.Context, mindnoteID string) (any, error) {
+	return c.feishuRequest(ctx, http.MethodGet,
+		"/mindnote/v1/mindnotes/"+mustPathEscape(extractToken(mindnoteID))+"/nodes", nil, nil)
+}
+
+func (c *LocalClient) CreateMindnoteNodes(ctx context.Context, mindnoteID string, body any) (any, error) {
+	return c.feishuRequest(ctx, http.MethodPost,
+		"/mindnote/v1/mindnotes/"+mustPathEscape(extractToken(mindnoteID))+"/nodes", nil, body)
+}
+
 func (c *LocalClient) CreateTask(ctx context.Context, body any) (any, error) {
 	return c.feishuRequest(ctx, http.MethodPost, "/task/v2/tasks", nil, body)
 }

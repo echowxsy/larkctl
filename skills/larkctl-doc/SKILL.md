@@ -74,6 +74,18 @@ larkctl wiki node URL_OR_TOKEN                 # Get wiki node info
 larkctl wiki create-node SPACE_ID --title "Page" --type docx --parent NODE_TOKEN
 ```
 
+### Mind notes (思维笔记)
+
+```bash
+larkctl mindnote nodes MINDNOTE_TOKEN                    # read the whole node tree
+larkctl mindnote create-nodes MINDNOTE_TOKEN nodes.json  # create/update nodes (or - for stdin)
+```
+
+A mind note is its own document type, not a docx block. Creating the file is not
+an open API — make it in Feishu (or copy one) and pass its token. The node JSON
+mirrors what `mindnote nodes` returns. Needs the `mindnote` scope group
+(`larkctl login mindnote`).
+
 ### Whiteboard
 ```bash
 larkctl board nodes WHITEBOARD_ID                      # List all nodes (use as template for create)

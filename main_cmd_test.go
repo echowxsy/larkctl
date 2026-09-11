@@ -59,6 +59,7 @@ type mockClient struct {
 	listWikiNodesResp    any
 	createWikiNodeResp   any
 	getBoardNodesResp    any
+	mindnoteNodesResp    any
 	createTaskResp       any
 	searchUsersResp      any
 	calendarPrimaryResp  any
@@ -245,6 +246,12 @@ func (m *mockClient) CreateBoardNodes(ctx context.Context, whiteboardID string, 
 	return nil, nil
 }
 func (m *mockClient) DeleteBoardNodes(ctx context.Context, whiteboardID string, nodeIDs []string) (any, error) {
+	return nil, nil
+}
+func (m *mockClient) GetMindnoteNodes(ctx context.Context, mindnoteID string) (any, error) {
+	return m.mindnoteNodesResp, nil
+}
+func (m *mockClient) CreateMindnoteNodes(ctx context.Context, mindnoteID string, body any) (any, error) {
 	return nil, nil
 }
 func (m *mockClient) CreateTask(ctx context.Context, body any) (any, error) {

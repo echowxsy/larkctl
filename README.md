@@ -86,6 +86,7 @@ larkctl mcp                                       # print the gateway's MCP endp
 | `bitable` | Multi-dimensional tables: tables, fields, records, views |
 | `drive` | Drive files: list, upload, download, import/export |
 | `board` | Whiteboard nodes: list, create, batch delete |
+| `mindnote` | Mind notes (思维笔记): read nodes, create/update nodes |
 | `im` | Messages: send, list, search, reply, reactions, files, find users |
 | `calendar` | Events, free/busy, meeting rooms, RSVP |
 | `mail` | Mailbox: list, read, send, reply, forward, drafts, search |
@@ -100,7 +101,7 @@ Run `larkctl <command> --help` for subcommands and flags.
 
 ## Scope groups
 
-Login requests only the scope groups you name (plus a small base set). Available groups: `docs`, `wiki`, `sheets`, `bitable`, `board`, `im`, `mail`, `calendar`, `task`, `contact`, or `all`:
+Login requests only the scope groups you name (plus a small base set). Available groups: `docs`, `wiki`, `sheets`, `bitable`, `board`, `mindnote`, `im`, `mail`, `calendar`, `task`, `contact`, or `all`:
 
 ```bash
 larkctl login                # default groups

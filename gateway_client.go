@@ -555,6 +555,22 @@ func (c *GatewayClient) DeleteBoardNodes(ctx context.Context, whiteboardID strin
 	return out, err
 }
 
+func (c *GatewayClient) GetMindnoteNodes(ctx context.Context, mindnoteID string) (any, error) {
+	query := url.Values{}
+	query.Set("mindnote_id", mindnoteID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "GET", "/v1/mindnote/nodes", query, nil, &out)
+	return out, err
+}
+
+func (c *GatewayClient) CreateMindnoteNodes(ctx context.Context, mindnoteID string, body any) (any, error) {
+	query := url.Values{}
+	query.Set("mindnote_id", mindnoteID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "POST", "/v1/mindnote/nodes/create", query, body, &out)
+	return out, err
+}
+
 func (c *GatewayClient) CreateTask(ctx context.Context, body any) (any, error) {
 	var out any
 	err := c.callJSONWithRefresh(ctx, "POST", "/v1/tasks/create", nil, body, &out)
