@@ -74,6 +74,41 @@ larkctl wiki node URL_OR_TOKEN                 # Get wiki node info
 larkctl wiki create-node SPACE_ID --title "Page" --type docx --parent NODE_TOKEN
 ```
 
+### Editing a document without rewriting it
+
+Two different APIs, both worth knowing:
+
+**`docs update`** (Markdown diff) — export with `docs export -f md` (block IDs come
+out as `<!-- bid:xxx -->` markers), edit the text, push it back. Only changed
+blocks are touched, so comments survive. Best for bulk text edits. It cannot
+create or change tables, and cannot move blocks — new blocks land at the end.
+
+**`docs edit`** (server-side commands) — for exactly what the diff flow cannot do:
+
+```bash
+larkctl docs fetch DOC --scope outline                         # headings only
+larkctl docs fetch DOC --scope keyword --keyword "job_canceled" --detail with-ids
+larkctl docs fetch DOC --scope section --start-block-id doxcnAAA --format markdown
+
+larkctl docs edit DOC --command append --content @table.xml     # DocxXML, any table size
+larkctl docs edit DOC --command str_replace --pattern old --content new
+larkctl docs edit DOC --command block_move_after --block-id doxcnAAA --src-block-ids doxcnBBB
+larkctl docs edit DOC --command block_replace --start-block-id doxcnAAA --end-block-id doxcnBBB --content @new.xml
+larkctl docs edit DOC --command block_delete --block-id doxcnAAA
+
+larkctl docs history DOC                                        # versions
+larkctl docs revert DOC --version <history_version_id>
+```
+
+`--content` takes `@file` or `-`. Block IDs come from `docs fetch --detail with-ids`;
+refetch after a structural edit before reusing them. `--revision-id` gives
+optimistic concurrency.
+
+DocxXML covers `<table>` (with `<colgroup>` widths, `colspan`/`rowspan`, cell
+background), `<grid>` columns, `<callout>`, `<pre lang caption><code>`, and
+`<whiteboard>` — the block API can express none of those directly, and it caps a
+new table at 9 rows.
+
 ### Whiteboard
 ```bash
 larkctl board nodes WHITEBOARD_ID                      # List all nodes (use as template for create)

@@ -101,7 +101,7 @@ var scopeGroups = map[string]struct {
 		// board:whiteboard:node:delete is deliberately not requested at login:
 		// apps without that permission enabled would fail the whole authorize
 		// page (error 20027). delete-nodes upgrades the session on demand.
-		Scopes:      "board:whiteboard:node:create board:whiteboard:node:read",
+		Scopes: "board:whiteboard:node:create board:whiteboard:node:read",
 	},
 	"calendar": {
 		Description: "Calendar events",
@@ -1307,7 +1307,9 @@ Examples:
 
 	docsCmd.AddCommand(infoCmd, blocksCmd, createBlocksCmd, deleteBlockCmd, commentsCmd,
 		searchCmd, createCmd, addCommentCmd, replyCommentCmd, resolveCommentCmd, permCmd, exportCmd, updateCmd, filesCmd,
-		newDocsAddImageCmd(), newDocsAddFileCmd(), newDocsAddLinkCmd(), newDocsAddMentionCmd())
+		newDocsAddImageCmd(), newDocsAddFileCmd(), newDocsAddLinkCmd(), newDocsAddMentionCmd(),
+		newDocsEditCmd(), newDocsFetchCmd(), newDocsHistoryCmd(), newDocsRevertCmd(),
+		newDocsRevertStatusCmd())
 	return docsCmd
 }
 

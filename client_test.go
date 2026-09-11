@@ -3949,6 +3949,133 @@ func TestLocal_BoardNodeMethods(t *testing.T) {
 	})
 }
 
+func TestGateway_DocsAIMethods(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EditDocument uses PUT and passes the command through", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/docs/ai/update" || r.Method != http.MethodPut {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			if r.URL.Query().Get("document_id") != "doc1" {
+				t.Fatalf("bad query: %v", r.URL.Query())
+			}
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			if body["command"] != "block_move_after" {
+				t.Fatalf("bad body: %v", body)
+			}
+			w.Write(okEnvelope(map[string]any{"result": "success"}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		body := map[string]any{"command": "block_move_after", "block_id": "b1", "src_block_ids": "b2"}
+		if _, err := c.EditDocument(context.Background(), "doc1", body); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("FetchDocument", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/docs/ai/fetch" || r.Method != http.MethodPost {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			w.Write(okEnvelope(map[string]any{"document": map[string]any{"content": "<p/>"}}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		if _, err := c.FetchDocument(context.Background(), "doc1", map[string]any{"format": "xml"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("history, revert and status", func(t *testing.T) {
+		var paths []string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			paths = append(paths, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+			w.Write(okEnvelope(map[string]any{}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		if _, err := c.ListDocumentHistories(context.Background(), "doc1", 20); err != nil {
+			t.Fatalf("histories: %v", err)
+		}
+		if _, err := c.RevertDocument(context.Background(), "doc1", map[string]any{"history_version_id": "7"}); err != nil {
+			t.Fatalf("revert: %v", err)
+		}
+		if _, err := c.GetDocumentRevertStatus(context.Background(), "doc1", "t1"); err != nil {
+			t.Fatalf("status: %v", err)
+		}
+		want := []string{
+			"GET /v1/docs/ai/histories?document_id=doc1&page_size=20",
+			"POST /v1/docs/ai/history/revert?document_id=doc1",
+			"GET /v1/docs/ai/history/revert-status?document_id=doc1&task_id=t1",
+		}
+		for i, w := range want {
+			if i >= len(paths) || paths[i] != w {
+				t.Fatalf("call %d = %q, want %q", i, paths, want)
+			}
+		}
+	})
+}
+
+func TestLocal_DocsAIMethods(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EditDocument", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/docs_ai/v1/documents/doc1" || r.Method != http.MethodPut {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			w.Write(feishuOK(map[string]any{"result": "success"}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		if _, err := c.EditDocument(context.Background(), "doc1", map[string]any{"command": "append"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("FetchDocument and CreateDocumentFromContent", func(t *testing.T) {
+		var paths []string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			paths = append(paths, r.Method+" "+r.URL.Path)
+			w.Write(feishuOK(map[string]any{}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		if _, err := c.FetchDocument(context.Background(), "doc1", map[string]any{}); err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if _, err := c.CreateDocumentFromContent(context.Background(), map[string]any{"content": "<p/>"}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		want := []string{"POST /docs_ai/v1/documents/doc1/fetch", "POST /docs_ai/v1/documents"}
+		for i, w := range want {
+			if paths[i] != w {
+				t.Fatalf("call %d = %q, want %q", i, paths[i], w)
+			}
+		}
+	})
+
+	t.Run("revert status uses revert_status with task_id", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/docs_ai/v1/documents/doc1/history/revert_status" {
+				t.Fatalf("path = %s", r.URL.Path)
+			}
+			if r.URL.Query().Get("task_id") != "t1" {
+				t.Fatalf("query = %v", r.URL.Query())
+			}
+			w.Write(feishuOK(map[string]any{}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		if _, err := c.GetDocumentRevertStatus(context.Background(), "doc1", "t1"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
 func TestUploadDocsMedia(t *testing.T) {
 	t.Parallel()
 

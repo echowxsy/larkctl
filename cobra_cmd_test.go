@@ -3853,3 +3853,39 @@ func TestDocsAddLinkAndMentionCmds(t *testing.T) {
 		}
 	})
 }
+
+// ---- docs_ai helpers ----
+
+func TestResolveContentArg(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := dir + "/body.xml"
+	if err := os.WriteFile(path, []byte("<p>hi</p>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := resolveContentArg("@" + path); err != nil || got != "<p>hi</p>" {
+		t.Errorf("@file = %q, %v", got, err)
+	}
+	if got, err := resolveContentArg("<p>inline</p>"); err != nil || got != "<p>inline</p>" {
+		t.Errorf("literal = %q, %v", got, err)
+	}
+	if _, err := resolveContentArg("@" + dir + "/missing.xml"); err == nil {
+		t.Error("expected an error for a missing file")
+	}
+}
+
+func TestDocsEditCommandList(t *testing.T) {
+	t.Parallel()
+
+	got := docsEditCommandList()
+	// Order must be stable (map iteration is not) and cover every command.
+	if !strings.HasPrefix(got, "str_replace | block_insert_after") {
+		t.Errorf("docsEditCommandList = %q", got)
+	}
+	for name := range docsEditCommands {
+		if !strings.Contains(got, name) {
+			t.Errorf("%q missing from %q", name, got)
+		}
+	}
+}

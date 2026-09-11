@@ -56,6 +56,17 @@ type FeishuClient interface {
 	ListWikiSpaces(ctx context.Context) (any, error)
 	ListWikiNodes(ctx context.Context, spaceID, parentNodeToken string) (any, error)
 	CreateWikiNode(ctx context.Context, spaceID string, body any) (any, error)
+	// docs_ai document API — a second, higher-level surface than the
+	// /docx/v1/.../blocks endpoints: the edit commands (str_replace,
+	// block_move_after, block_replace, range delete) and the DocxXML parser run
+	// on Feishu's side, which is how tables of any size and block moves become
+	// possible at all.
+	CreateDocumentFromContent(ctx context.Context, body any) (any, error)
+	EditDocument(ctx context.Context, docID string, body any) (any, error)
+	FetchDocument(ctx context.Context, docID string, body any) (any, error)
+	ListDocumentHistories(ctx context.Context, docID string, pageSize int) (any, error)
+	RevertDocument(ctx context.Context, docID string, body any) (any, error)
+	GetDocumentRevertStatus(ctx context.Context, docID, taskID string) (any, error)
 	GetBoardNodes(ctx context.Context, whiteboardID string) (any, error)
 	CreateBoardNodes(ctx context.Context, whiteboardID string, body any, clientToken string) (any, error)
 	DeleteBoardNodes(ctx context.Context, whiteboardID string, nodeIDs []string) (any, error)
