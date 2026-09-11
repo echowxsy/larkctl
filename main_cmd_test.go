@@ -59,6 +59,9 @@ type mockClient struct {
 	listWikiNodesResp    any
 	createWikiNodeResp   any
 	getBoardNodesResp    any
+	editDocBody          any
+	fetchDocBody         any
+	fetchDocResp         any
 	createTaskResp       any
 	searchUsersResp      any
 	calendarPrimaryResp  any
@@ -237,6 +240,26 @@ func (m *mockClient) ListWikiNodes(ctx context.Context, spaceID, parentNodeToken
 }
 func (m *mockClient) CreateWikiNode(ctx context.Context, spaceID string, body any) (any, error) {
 	return m.createWikiNodeResp, nil
+}
+func (m *mockClient) CreateDocumentFromContent(ctx context.Context, body any) (any, error) {
+	return nil, nil
+}
+func (m *mockClient) EditDocument(ctx context.Context, docID string, body any) (any, error) {
+	m.editDocBody = body
+	return nil, nil
+}
+func (m *mockClient) FetchDocument(ctx context.Context, docID string, body any) (any, error) {
+	m.fetchDocBody = body
+	return m.fetchDocResp, nil
+}
+func (m *mockClient) ListDocumentHistories(ctx context.Context, docID string, pageSize int) (any, error) {
+	return nil, nil
+}
+func (m *mockClient) RevertDocument(ctx context.Context, docID string, body any) (any, error) {
+	return nil, nil
+}
+func (m *mockClient) GetDocumentRevertStatus(ctx context.Context, docID, taskID string) (any, error) {
+	return nil, nil
 }
 func (m *mockClient) GetBoardNodes(ctx context.Context, whiteboardID string) (any, error) {
 	return m.getBoardNodesResp, nil

@@ -527,6 +527,56 @@ func (c *GatewayClient) CreateWikiNode(ctx context.Context, spaceID string, body
 	return out, err
 }
 
+func (c *GatewayClient) CreateDocumentFromContent(ctx context.Context, body any) (any, error) {
+	var out any
+	err := c.callJSONWithRefresh(ctx, "POST", "/v1/docs/ai/create", nil, body, &out)
+	return out, err
+}
+
+func (c *GatewayClient) EditDocument(ctx context.Context, docID string, body any) (any, error) {
+	query := url.Values{}
+	query.Set("document_id", docID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "PUT", "/v1/docs/ai/update", query, body, &out)
+	return out, err
+}
+
+func (c *GatewayClient) FetchDocument(ctx context.Context, docID string, body any) (any, error) {
+	query := url.Values{}
+	query.Set("document_id", docID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "POST", "/v1/docs/ai/fetch", query, body, &out)
+	return out, err
+}
+
+func (c *GatewayClient) ListDocumentHistories(ctx context.Context, docID string, pageSize int) (any, error) {
+	query := url.Values{}
+	query.Set("document_id", docID)
+	if pageSize > 0 {
+		query.Set("page_size", strconv.Itoa(pageSize))
+	}
+	var out any
+	err := c.callJSONWithRefresh(ctx, "GET", "/v1/docs/ai/histories", query, nil, &out)
+	return out, err
+}
+
+func (c *GatewayClient) RevertDocument(ctx context.Context, docID string, body any) (any, error) {
+	query := url.Values{}
+	query.Set("document_id", docID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "POST", "/v1/docs/ai/history/revert", query, body, &out)
+	return out, err
+}
+
+func (c *GatewayClient) GetDocumentRevertStatus(ctx context.Context, docID, taskID string) (any, error) {
+	query := url.Values{}
+	query.Set("document_id", docID)
+	query.Set("task_id", taskID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "GET", "/v1/docs/ai/history/revert-status", query, nil, &out)
+	return out, err
+}
+
 func (c *GatewayClient) GetBoardNodes(ctx context.Context, whiteboardID string) (any, error) {
 	query := url.Values{}
 	query.Set("whiteboard_id", whiteboardID)

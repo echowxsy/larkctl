@@ -598,6 +598,43 @@ func (c *LocalClient) CreateWikiNode(ctx context.Context, spaceID string, body a
 		"/wiki/v2/spaces/"+mustPathEscape(spaceID)+"/nodes", nil, body)
 }
 
+const docsAIDocumentsPath = "/docs_ai/v1/documents"
+
+func (c *LocalClient) CreateDocumentFromContent(ctx context.Context, body any) (any, error) {
+	return c.feishuRequest(ctx, http.MethodPost, docsAIDocumentsPath, nil, body)
+}
+
+func (c *LocalClient) EditDocument(ctx context.Context, docID string, body any) (any, error) {
+	return c.feishuRequest(ctx, http.MethodPut,
+		docsAIDocumentsPath+"/"+mustPathEscape(extractToken(docID)), nil, body)
+}
+
+func (c *LocalClient) FetchDocument(ctx context.Context, docID string, body any) (any, error) {
+	return c.feishuRequest(ctx, http.MethodPost,
+		docsAIDocumentsPath+"/"+mustPathEscape(extractToken(docID))+"/fetch", nil, body)
+}
+
+func (c *LocalClient) ListDocumentHistories(ctx context.Context, docID string, pageSize int) (any, error) {
+	query := url.Values{}
+	if pageSize > 0 {
+		query.Set("page_size", strconv.Itoa(pageSize))
+	}
+	return c.feishuRequest(ctx, http.MethodGet,
+		docsAIDocumentsPath+"/"+mustPathEscape(extractToken(docID))+"/histories", query, nil)
+}
+
+func (c *LocalClient) RevertDocument(ctx context.Context, docID string, body any) (any, error) {
+	return c.feishuRequest(ctx, http.MethodPost,
+		docsAIDocumentsPath+"/"+mustPathEscape(extractToken(docID))+"/history/revert", nil, body)
+}
+
+func (c *LocalClient) GetDocumentRevertStatus(ctx context.Context, docID, taskID string) (any, error) {
+	query := url.Values{}
+	query.Set("task_id", taskID)
+	return c.feishuRequest(ctx, http.MethodGet,
+		docsAIDocumentsPath+"/"+mustPathEscape(extractToken(docID))+"/history/revert_status", query, nil)
+}
+
 func (c *LocalClient) GetBoardNodes(ctx context.Context, whiteboardID string) (any, error) {
 	token := extractToken(whiteboardID)
 	return c.feishuRequest(ctx, http.MethodGet,
