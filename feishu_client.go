@@ -59,6 +59,12 @@ type FeishuClient interface {
 	GetBoardNodes(ctx context.Context, whiteboardID string) (any, error)
 	CreateBoardNodes(ctx context.Context, whiteboardID string, body any, clientToken string) (any, error)
 	DeleteBoardNodes(ctx context.Context, whiteboardID string, nodeIDs []string) (any, error)
+	// CreateBoardNodesFromCode renders Mermaid / PlantUML / SVG source into
+	// native nodes. Feishu lays the diagram out and attaches the connectors to
+	// the shapes, which client-built nodes cannot do.
+	CreateBoardNodesFromCode(ctx context.Context, whiteboardID string, body any) (any, error)
+	ExportBoard(ctx context.Context, whiteboardID, exportType string) (any, error)
+	DownloadBoardImage(ctx context.Context, whiteboardID string, w io.Writer) error
 	CreateTask(ctx context.Context, body any) (any, error)
 	SearchUsers(ctx context.Context, query string, pageSize int) (any, error)
 	GetCalendarPrimary(ctx context.Context) (any, error)

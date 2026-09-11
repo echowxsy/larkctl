@@ -59,6 +59,10 @@ type mockClient struct {
 	listWikiNodesResp    any
 	createWikiNodeResp   any
 	getBoardNodesResp    any
+	boardCodeBody        any
+	boardExportType      string
+	boardExportResp      any
+	boardImageData       []byte
 	createTaskResp       any
 	searchUsersResp      any
 	calendarPrimaryResp  any
@@ -246,6 +250,21 @@ func (m *mockClient) CreateBoardNodes(ctx context.Context, whiteboardID string, 
 }
 func (m *mockClient) DeleteBoardNodes(ctx context.Context, whiteboardID string, nodeIDs []string) (any, error) {
 	return nil, nil
+}
+func (m *mockClient) CreateBoardNodesFromCode(ctx context.Context, whiteboardID string, body any) (any, error) {
+	m.boardCodeBody = body
+	return nil, nil
+}
+func (m *mockClient) ExportBoard(ctx context.Context, whiteboardID, exportType string) (any, error) {
+	m.boardExportType = exportType
+	return m.boardExportResp, nil
+}
+func (m *mockClient) DownloadBoardImage(ctx context.Context, whiteboardID string, w io.Writer) error {
+	if m.boardImageData != nil {
+		_, err := w.Write(m.boardImageData)
+		return err
+	}
+	return nil
 }
 func (m *mockClient) CreateTask(ctx context.Context, body any) (any, error) {
 	return m.createTaskResp, nil

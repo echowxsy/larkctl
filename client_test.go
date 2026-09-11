@@ -3949,6 +3949,133 @@ func TestLocal_BoardNodeMethods(t *testing.T) {
 	})
 }
 
+func TestGateway_BoardDiagramMethods(t *testing.T) {
+	t.Parallel()
+
+	t.Run("CreateBoardNodesFromCode", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/board/nodes/plantuml" || r.Method != http.MethodPost {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			if r.URL.Query().Get("whiteboard_id") != "wb1" {
+				t.Fatalf("bad query: %v", r.URL.Query())
+			}
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			if body["plant_uml_code"] != "classDiagram" || body["syntax_type"] != float64(2) {
+				t.Fatalf("bad body: %v", body)
+			}
+			w.Write(okEnvelope(map[string]any{"created_node_id": "t1:2"}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		body := map[string]any{"plant_uml_code": "classDiagram", "syntax_type": 2, "parse_mode": 1, "overwrite": true}
+		if _, err := c.CreateBoardNodesFromCode(context.Background(), "wb1", body); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("ExportBoard", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/board/export" || r.Method != http.MethodPost {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			if body["export_type"] != "svg" {
+				t.Fatalf("bad body: %v", body)
+			}
+			w.Write(okEnvelope(map[string]any{"content": "<svg/>"}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		data, err := c.ExportBoard(context.Background(), "wb1", "svg")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if content, _ := anyMapString(data, "content"); content != "<svg/>" {
+			t.Fatalf("content = %v", data)
+		}
+	})
+
+	t.Run("DownloadBoardImage streams bytes", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/board/image" || r.Method != http.MethodGet {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			if r.URL.Query().Get("whiteboard_id") != "wb1" {
+				t.Fatalf("bad query: %v", r.URL.Query())
+			}
+			w.Write([]byte{0xFF, 0xD8, 0xFF, 0xE0})
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		var buf bytes.Buffer
+		if err := c.DownloadBoardImage(context.Background(), "wb1", &buf); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := buf.Bytes(); len(got) != 4 || got[0] != 0xFF {
+			t.Fatalf("body = %v, want JPEG magic bytes", got)
+		}
+	})
+}
+
+func TestLocal_BoardDiagramMethods(t *testing.T) {
+	t.Parallel()
+
+	t.Run("CreateBoardNodesFromCode", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/board/v1/whiteboards/wb1/nodes/plantuml" || r.Method != http.MethodPost {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			if body["syntax_type"] != float64(1) {
+				t.Fatalf("bad body: %v", body)
+			}
+			w.Write(feishuOK(map[string]any{"created_node_id": "t1:2"}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		body := map[string]any{"plant_uml_code": "@startuml", "syntax_type": 1, "parse_mode": 1}
+		if _, err := c.CreateBoardNodesFromCode(context.Background(), "wb1", body); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("ExportBoard", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/board/v1/whiteboards/wb1/export" || r.Method != http.MethodPost {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			w.Write(feishuOK(map[string]any{"content": "<svg/>"}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		if _, err := c.ExportBoard(context.Background(), "wb1", "svg"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("DownloadBoardImage", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/board/v1/whiteboards/wb1/download_as_image" || r.Method != http.MethodGet {
+				t.Fatalf("%s %s", r.Method, r.URL.Path)
+			}
+			w.Write([]byte("jpegbytes"))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		var buf bytes.Buffer
+		if err := c.DownloadBoardImage(context.Background(), "wb1", &buf); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if buf.String() != "jpegbytes" {
+			t.Fatalf("body = %q", buf.String())
+		}
+	})
+}
+
 func TestUploadDocsMedia(t *testing.T) {
 	t.Parallel()
 

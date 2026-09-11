@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -442,4 +443,108 @@ func createDocsTextBlock(ctx context.Context, client FeishuClient, docID, parent
 	}
 	printJSON(data)
 	return nil
+}
+
+// boardTokenFromCreate pulls the whiteboard token out of a create-blocks
+// response. A board block is the only way to make a whiteboard — there is no
+// "create whiteboard" API — and the token, not the block ID, is what the
+// board commands address.
+func boardTokenFromCreate(resp any) (blockID, whiteboardToken string, err error) {
+	var parsed struct {
+		Children []struct {
+			BlockID string `json:"block_id"`
+			Board   struct {
+				Token string `json:"token"`
+			} `json:"board"`
+		} `json:"children"`
+	}
+	b, err := json.Marshal(resp)
+	if err != nil {
+		return "", "", fmt.Errorf("encode create-blocks response: %w", err)
+	}
+	if err := json.Unmarshal(b, &parsed); err != nil {
+		return "", "", fmt.Errorf("parse create-blocks response: %w", err)
+	}
+	if len(parsed.Children) == 0 || parsed.Children[0].Board.Token == "" {
+		return "", "", fmt.Errorf("create-blocks returned no whiteboard token")
+	}
+	return parsed.Children[0].BlockID, parsed.Children[0].Board.Token, nil
+}
+
+func newDocsAddBoardCmd() *cobra.Command {
+	var parentBlockID, format string
+	var index int
+	cmd := &cobra.Command{
+		Use:   "add-board [document_id_or_url] [file_or_-]",
+		Short: "Insert a whiteboard and draw it from Mermaid / PlantUML / SVG source",
+		Long: `Create a whiteboard block in a document and render diagram source onto it.
+
+Two calls in one: a whiteboard only exists as a document block, so drawing into
+a fresh board otherwise means creating the block, reading its token, then
+calling "board update". Feishu lays the diagram out server-side and attaches
+the connectors to the shapes.
+
+Examples:
+  larkctl docs add-board TOKEN sequence.puml --format plantuml
+  cat state.mmd | larkctl docs add-board TOKEN - --index 3`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			syntaxType, ok := boardSyntaxTypes[strings.ToLower(format)]
+			if !ok {
+				return fmt.Errorf("unknown --format %q (want mermaid, plantuml or svg)", format)
+			}
+			code, err := readTextInput(args, 1)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(code) == "" {
+				return errors.New("empty diagram source")
+			}
+			client, err := authedClient(gatewayURL)
+			if err != nil {
+				return err
+			}
+			if err := requireScopes(cmd.Context(), client, "board:whiteboard:node:create"); err != nil {
+				return err
+			}
+			docID, err := resolveDocID(cmd.Context(), client, args[0])
+			if err != nil {
+				return err
+			}
+			created, err := client.CreateDocumentBlocks(cmd.Context(), docID, parentBlockID, map[string]any{
+				"index": index,
+				"children": []any{map[string]any{
+					"block_type": 43,
+					"board":      map[string]any{"align": 2},
+				}},
+			})
+			if err != nil {
+				return fmt.Errorf("create board block: %w", err)
+			}
+			blockID, token, err := boardTokenFromCreate(created)
+			if err != nil {
+				return err
+			}
+			body := map[string]any{
+				"plant_uml_code": code,
+				"syntax_type":    syntaxType,
+				"parse_mode":     1,
+				"overwrite":      true,
+			}
+			if _, err := client.CreateBoardNodesFromCode(cmd.Context(), token, body); err != nil {
+				// An empty board block renders as a blank frame; take it back
+				// out so a bad diagram does not scar the document.
+				if _, delErr := client.DeleteDocumentBlock(cmd.Context(), docID, blockID); delErr != nil {
+					return fmt.Errorf("%w (also failed to remove the empty board block %s: %v)", err, blockID, delErr)
+				}
+				return err
+			}
+			fmt.Printf("whiteboard %s (block %s)\n", token, blockID)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&format, "format", "mermaid", "source format: mermaid, plantuml or svg")
+	cmd.Flags().StringVar(&parentBlockID, "block-id", "", "parent block ID (default: document root)")
+	cmd.Flags().IntVar(&index, "index", -1, "insert position among the parent's children (-1 appends)")
+	return cmd
 }
