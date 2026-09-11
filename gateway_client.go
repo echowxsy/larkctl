@@ -555,6 +555,49 @@ func (c *GatewayClient) DeleteBoardNodes(ctx context.Context, whiteboardID strin
 	return out, err
 }
 
+func (c *GatewayClient) CreateBoardNodesFromCode(ctx context.Context, whiteboardID string, body any) (any, error) {
+	query := url.Values{}
+	query.Set("whiteboard_id", whiteboardID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "POST", "/v1/board/nodes/plantuml", query, body, &out)
+	return out, err
+}
+
+func (c *GatewayClient) ExportBoard(ctx context.Context, whiteboardID, exportType string) (any, error) {
+	query := url.Values{}
+	query.Set("whiteboard_id", whiteboardID)
+	var out any
+	err := c.callJSONWithRefresh(ctx, "POST", "/v1/board/export", query,
+		map[string]any{"export_type": exportType}, &out)
+	return out, err
+}
+
+func (c *GatewayClient) DownloadBoardImage(ctx context.Context, whiteboardID string, w io.Writer) error {
+	targetURL := c.baseURL + "/v1/board/image?whiteboard_id=" + url.QueryEscape(whiteboardID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return err
+	}
+	token := strings.TrimSpace(c.session())
+	if token == "" {
+		return errors.New("missing session token, run `larkctl login`")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Client-Version", ProtocolVersion)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("board image download failed (status=%d): %s", resp.StatusCode, string(body))
+	}
+	_, err = io.Copy(w, resp.Body)
+	return err
+}
+
 func (c *GatewayClient) CreateTask(ctx context.Context, body any) (any, error) {
 	var out any
 	err := c.callJSONWithRefresh(ctx, "POST", "/v1/tasks/create", nil, body, &out)

@@ -621,6 +621,43 @@ func (c *LocalClient) DeleteBoardNodes(ctx context.Context, whiteboardID string,
 		map[string]any{"ids": nodeIDs})
 }
 
+func (c *LocalClient) CreateBoardNodesFromCode(ctx context.Context, whiteboardID string, body any) (any, error) {
+	token := extractToken(whiteboardID)
+	return c.feishuRequest(ctx, http.MethodPost,
+		"/board/v1/whiteboards/"+mustPathEscape(token)+"/nodes/plantuml", nil, body)
+}
+
+func (c *LocalClient) ExportBoard(ctx context.Context, whiteboardID, exportType string) (any, error) {
+	token := extractToken(whiteboardID)
+	return c.feishuRequest(ctx, http.MethodPost,
+		"/board/v1/whiteboards/"+mustPathEscape(token)+"/export", nil,
+		map[string]any{"export_type": exportType})
+}
+
+func (c *LocalClient) DownloadBoardImage(ctx context.Context, whiteboardID string, w io.Writer) error {
+	if err := c.ensureToken(ctx); err != nil {
+		return err
+	}
+	target := c.baseURL + "/board/v1/whiteboards/" + mustPathEscape(extractToken(whiteboardID)) + "/download_as_image"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token())
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("board image download failed (status=%d): %s", resp.StatusCode, string(body))
+	}
+	_, err = io.Copy(w, resp.Body)
+	return err
+}
+
 func (c *LocalClient) CreateTask(ctx context.Context, body any) (any, error) {
 	return c.feishuRequest(ctx, http.MethodPost, "/task/v2/tasks", nil, body)
 }

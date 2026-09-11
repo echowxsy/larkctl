@@ -75,12 +75,37 @@ larkctl wiki create-node SPACE_ID --title "Page" --type docx --parent NODE_TOKEN
 ```
 
 ### Whiteboard
+
+**Diagrams — start here.** Feishu renders Mermaid / PlantUML server-side, so the
+layout and the connector-to-shape attachment are done for you:
+
+```bash
+larkctl docs add-board DOC_TOKEN diagram.mmd --format mermaid   # new board in a doc + draw, one call
+larkctl board update WHITEBOARD_ID seq.puml --format plantuml --overwrite
+cat state.mmd | larkctl board update WHITEBOARD_ID - --format mermaid
+larkctl board source WHITEBOARD_ID            # get the Mermaid/PlantUML back to edit and re-push
+larkctl board image WHITEBOARD_ID -o board.jpg   # preview image — look at what you drew
+larkctl board export WHITEBOARD_ID -o board.svg  # vector export
+```
+
+Class diagrams become native `table_uml` shapes, sequence diagrams `life_line`
+shapes, flowcharts and state machines `composite_shape` + attached connectors —
+drag a box and its arrows follow.
+
+**Raw nodes** — for layouts Mermaid cannot express (posters, precise palettes):
+
 ```bash
 larkctl board nodes WHITEBOARD_ID                      # List all nodes (use as template for create)
 larkctl board create-nodes WHITEBOARD_ID nodes.json    # Create nodes (JSON {"nodes":[...]}, or - for stdin)
 larkctl board create-nodes WHITEBOARD_ID - --client-token my-idem-token-1   # Idempotent create
 larkctl board delete-nodes WHITEBOARD_ID NODE_ID...    # Batch delete (auto-chunks by 100)
 ```
+
+Hand-built connectors anchor to coordinates, not to shapes, so they detach when
+a node is dragged — prefer `board update` whenever the diagram is expressible as
+Mermaid or PlantUML. A `table_uml` node also needs `table.meta`
+(`col_num` / `col_sizes` / `row_num` / `row_sizes` / `style`) or the whole batch
+fails with `code=99992402 field validation failed`.
 
 The whiteboard token comes from the board URL (`/board/<token>`) or from a doc's
 whiteboard block (`board nodes` on the block token). Node JSON uses the Feishu

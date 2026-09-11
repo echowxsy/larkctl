@@ -101,7 +101,7 @@ var scopeGroups = map[string]struct {
 		// board:whiteboard:node:delete is deliberately not requested at login:
 		// apps without that permission enabled would fail the whole authorize
 		// page (error 20027). delete-nodes upgrades the session on demand.
-		Scopes:      "board:whiteboard:node:create board:whiteboard:node:read",
+		Scopes: "board:whiteboard:node:create board:whiteboard:node:read",
 	},
 	"calendar": {
 		Description: "Calendar events",
@@ -1307,7 +1307,8 @@ Examples:
 
 	docsCmd.AddCommand(infoCmd, blocksCmd, createBlocksCmd, deleteBlockCmd, commentsCmd,
 		searchCmd, createCmd, addCommentCmd, replyCommentCmd, resolveCommentCmd, permCmd, exportCmd, updateCmd, filesCmd,
-		newDocsAddImageCmd(), newDocsAddFileCmd(), newDocsAddLinkCmd(), newDocsAddMentionCmd())
+		newDocsAddImageCmd(), newDocsAddFileCmd(), newDocsAddLinkCmd(), newDocsAddMentionCmd(),
+		newDocsAddBoardCmd())
 	return docsCmd
 }
 
@@ -3951,6 +3952,11 @@ func resolveTimeRange(startStr, endStr string, days int) (string, string) {
 	return fmt.Sprintf("%d", start.Unix()), fmt.Sprintf("%d", end.Unix())
 }
 
+// boardSyntaxTypes maps a format name onto the whiteboard API's syntax_type
+// enum for POST /board/v1/whiteboards/{id}/nodes/plantuml. The request field is
+// called plant_uml_code for all three; syntax_type picks the parser.
+var boardSyntaxTypes = map[string]int{"plantuml": 1, "mermaid": 2, "svg": 3}
+
 func newBoardCmd() *cobra.Command {
 	boardCmd := &cobra.Command{
 		Use:   "board",
@@ -4034,10 +4040,217 @@ func newBoardCmd() *cobra.Command {
 		},
 	}
 
+	var updateFormat string
+	var updateOverwrite bool
+	updateCmd := &cobra.Command{
+		Use:   "update [whiteboard_id_or_url] [file_or_-]",
+		Short: "Draw on a whiteboard from Mermaid / PlantUML / SVG source (Feishu does the layout)",
+		Long: `Render diagram source into native whiteboard nodes.
+
+Feishu renders server-side, so a class diagram becomes real table_uml shapes, a
+sequence diagram becomes life_line shapes, and the connectors attach to those
+shapes — dragging a box keeps its arrows. Hand-built nodes (board create-nodes)
+can only anchor connectors to coordinates.
+
+Examples:
+  larkctl board update <url> diagram.mmd --format mermaid --overwrite
+  cat seq.puml | larkctl board update <url> - --format plantuml`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			syntaxType, ok := boardSyntaxTypes[strings.ToLower(updateFormat)]
+			if !ok {
+				return fmt.Errorf("unknown --format %q (want mermaid, plantuml or svg)", updateFormat)
+			}
+			code, err := readTextInput(args, 1)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(code) == "" {
+				return errors.New("empty diagram source")
+			}
+			client, err := authedClient(gatewayURL)
+			if err != nil {
+				return err
+			}
+			if err := requireScopes(cmd.Context(), client, "board:whiteboard:node:create"); err != nil {
+				return err
+			}
+			// The field is named plant_uml_code for every syntax, Mermaid and
+			// SVG included; syntax_type is what actually selects the parser.
+			body := map[string]any{
+				"plant_uml_code": code,
+				"syntax_type":    syntaxType,
+				"parse_mode":     1,
+				"overwrite":      updateOverwrite,
+			}
+			data, err := client.CreateBoardNodesFromCode(cmd.Context(), args[0], body)
+			if err != nil {
+				return err
+			}
+			printJSON(data)
+			return nil
+		},
+	}
+	updateCmd.Flags().StringVar(&updateFormat, "format", "mermaid", "source format: mermaid, plantuml or svg")
+	updateCmd.Flags().BoolVar(&updateOverwrite, "overwrite", false, "wipe the board before drawing (default: append)")
+
+	var imageOutput string
+	imageCmd := &cobra.Command{
+		Use:   "image [whiteboard_id_or_url]",
+		Short: "Download the whiteboard preview image (JPEG)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient(gatewayURL)
+			if err != nil {
+				return err
+			}
+			outPath := imageOutput
+			if outPath == "" {
+				outPath = extractToken(args[0]) + ".jpg"
+			}
+			f, err := os.Create(outPath)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			if err := client.DownloadBoardImage(cmd.Context(), args[0], f); err != nil {
+				return err
+			}
+			fmt.Printf("Saved: %s\n", outPath)
+			return nil
+		},
+	}
+	imageCmd.Flags().StringVarP(&imageOutput, "output", "o", "", "output file path (default: <whiteboard_id>.jpg)")
+
+	var exportFormat, exportOutput string
+	exportCmd := &cobra.Command{
+		Use:   "export [whiteboard_id_or_url]",
+		Short: "Export a whiteboard as SVG",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.ToLower(exportFormat) != "svg" {
+				return fmt.Errorf("unknown --format %q (only svg is supported)", exportFormat)
+			}
+			client, err := authedClient(gatewayURL)
+			if err != nil {
+				return err
+			}
+			data, err := client.ExportBoard(cmd.Context(), args[0], strings.ToLower(exportFormat))
+			if err != nil {
+				return err
+			}
+			content, _ := anyMapString(data, "content")
+			if content == "" {
+				// Unexpected shape — hand back whatever came so the caller can see it.
+				printJSON(data)
+				return nil
+			}
+			outPath := exportOutput
+			if outPath == "" {
+				outPath = extractToken(args[0]) + ".svg"
+			}
+			if err := os.WriteFile(outPath, []byte(content), 0o600); err != nil {
+				return err
+			}
+			fmt.Printf("Saved: %s\n", outPath)
+			return nil
+		},
+	}
+	exportCmd.Flags().StringVar(&exportFormat, "format", "svg", "export format (svg)")
+	exportCmd.Flags().StringVarP(&exportOutput, "output", "o", "", "output file path (default: <whiteboard_id>.svg)")
+
+	sourceCmd := &cobra.Command{
+		Use:   "source [whiteboard_id_or_url]",
+		Short: "Print the Mermaid / PlantUML source a board was drawn from",
+		Long: `Boards drawn by 'board update' keep their source on the section node that
+wraps them, so the diagram can be edited as code and pushed again. Boards built
+from hand-written nodes carry no source and print nothing.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient(gatewayURL)
+			if err != nil {
+				return err
+			}
+			data, err := client.GetBoardNodes(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			codes := extractBoardSyntax(data)
+			if len(codes) == 0 {
+				return errors.New("no diagram source on this whiteboard (drawn from raw nodes?)")
+			}
+			for _, code := range codes {
+				fmt.Println(code)
+			}
+			return nil
+		},
+	}
+
 	boardCmd.AddCommand(nodesCmd)
 	boardCmd.AddCommand(createNodesCmd)
 	boardCmd.AddCommand(deleteNodesCmd)
+	boardCmd.AddCommand(updateCmd)
+	boardCmd.AddCommand(imageCmd)
+	boardCmd.AddCommand(exportCmd)
+	boardCmd.AddCommand(sourceCmd)
 	return boardCmd
+}
+
+// readTextInput reads raw text (diagram source) from a file argument, or from
+// stdin when the argument is "-".
+func readTextInput(args []string, argIndex int) (string, error) {
+	var r io.Reader = os.Stdin
+	if argIndex < len(args) && args[argIndex] != "-" {
+		f, err := os.Open(args[argIndex])
+		if err != nil {
+			return "", fmt.Errorf("open input file: %w", err)
+		}
+		defer f.Close()
+		r = f
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return "", fmt.Errorf("read input: %w", err)
+	}
+	return string(data), nil
+}
+
+// anyMapString pulls a string field out of a decoded JSON object.
+func anyMapString(data any, key string) (string, bool) {
+	m, ok := data.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	s, ok := m[key].(string)
+	return s, ok
+}
+
+// extractBoardSyntax collects the diagram source Feishu stores on the section
+// nodes of boards drawn from Mermaid / PlantUML (nodes[].syntax.code).
+func extractBoardSyntax(data any) []string {
+	m, ok := data.(map[string]any)
+	if !ok {
+		return nil
+	}
+	nodes, ok := m["nodes"].([]any)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, n := range nodes {
+		node, ok := n.(map[string]any)
+		if !ok {
+			continue
+		}
+		syntax, ok := node["syntax"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if code, ok := syntax["code"].(string); ok && strings.TrimSpace(code) != "" {
+			out = append(out, code)
+		}
+	}
+	return out
 }
 
 func newMCPCmd() *cobra.Command {

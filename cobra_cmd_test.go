@@ -3853,3 +3853,94 @@ func TestDocsAddLinkAndMentionCmds(t *testing.T) {
 		}
 	})
 }
+
+// ---- board diagram helpers ----
+
+func TestExtractBoardSyntax(t *testing.T) {
+	t.Parallel()
+
+	// A board drawn from Mermaid keeps the source on its section node.
+	data := map[string]any{"nodes": []any{
+		map[string]any{"id": "u1:1", "type": "table_uml"},
+		map[string]any{"id": "t1:2", "type": "section",
+			"syntax": map[string]any{"code": "classDiagram\n  class A"}},
+	}}
+	got := extractBoardSyntax(data)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "classDiagram") {
+		t.Fatalf("extractBoardSyntax = %v", got)
+	}
+
+	// Hand-built nodes carry no syntax, and a blank code field is not a source.
+	for _, empty := range []any{
+		map[string]any{"nodes": []any{map[string]any{"id": "u1:1", "type": "table_uml"}}},
+		map[string]any{"nodes": []any{map[string]any{"syntax": map[string]any{"code": "  "}}}},
+		map[string]any{},
+		"not an object",
+	} {
+		if got := extractBoardSyntax(empty); len(got) != 0 {
+			t.Errorf("extractBoardSyntax(%v) = %v, want none", empty, got)
+		}
+	}
+}
+
+func TestReadTextInput(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := dir + "/diagram.mmd"
+	if err := os.WriteFile(path, []byte("flowchart TD\n  A --> B\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readTextInput([]string{"wb1", path}, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(got, "A --> B") {
+		t.Errorf("readTextInput = %q", got)
+	}
+
+	if _, err := readTextInput([]string{"wb1", dir + "/missing.mmd"}, 1); err == nil {
+		t.Error("expected an error for a missing file")
+	}
+}
+
+func TestAnyMapString(t *testing.T) {
+	t.Parallel()
+
+	if got, ok := anyMapString(map[string]any{"content": "<svg/>"}, "content"); !ok || got != "<svg/>" {
+		t.Errorf("anyMapString = %q, %v", got, ok)
+	}
+	if _, ok := anyMapString(map[string]any{"content": 42}, "content"); ok {
+		t.Error("non-string field should not report ok")
+	}
+	if _, ok := anyMapString("not an object", "content"); ok {
+		t.Error("non-object should not report ok")
+	}
+}
+
+func TestBoardTokenFromCreate(t *testing.T) {
+	t.Parallel()
+
+	resp := map[string]any{"children": []any{map[string]any{
+		"block_id": "doxcnBLOCK",
+		"board":    map[string]any{"align": 2, "token": "WB_TOKEN"},
+	}}}
+	blockID, token, err := boardTokenFromCreate(resp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if blockID != "doxcnBLOCK" || token != "WB_TOKEN" {
+		t.Fatalf("blockID=%q token=%q", blockID, token)
+	}
+
+	// A block with no token is unusable: the board commands address the token.
+	for _, bad := range []any{
+		map[string]any{"children": []any{}},
+		map[string]any{"children": []any{map[string]any{"block_id": "b1"}}},
+		map[string]any{},
+	} {
+		if _, _, err := boardTokenFromCreate(bad); err == nil {
+			t.Errorf("boardTokenFromCreate(%v) = nil error, want failure", bad)
+		}
+	}
+}
