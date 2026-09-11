@@ -101,7 +101,11 @@ var scopeGroups = map[string]struct {
 		// board:whiteboard:node:delete is deliberately not requested at login:
 		// apps without that permission enabled would fail the whole authorize
 		// page (error 20027). delete-nodes upgrades the session on demand.
-		Scopes:      "board:whiteboard:node:create board:whiteboard:node:read",
+		Scopes: "board:whiteboard:node:create board:whiteboard:node:read",
+	},
+	"mindnote": {
+		Description: "Mind notes (思维笔记)",
+		Scopes:      "mindnote:node:create mindnote:node:read",
 	},
 	"calendar": {
 		Description: "Calendar events",
@@ -199,6 +203,7 @@ func newRootCmd() *cobra.Command {
 		newTasksCmd(),
 		newCalendarCmd(),
 		newBoardCmd(),
+		newMindnoteCmd(),
 		newIMCmd(),
 		newAgentCmd(),
 		newMailCmd(),

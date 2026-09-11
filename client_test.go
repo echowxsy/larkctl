@@ -3949,6 +3949,56 @@ func TestLocal_BoardNodeMethods(t *testing.T) {
 	})
 }
 
+func TestMindnoteNodeMethods(t *testing.T) {
+	t.Parallel()
+
+	t.Run("gateway", func(t *testing.T) {
+		var paths []string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			paths = append(paths, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+			w.Write(okEnvelope(map[string]any{"nodes": []any{}}))
+		}))
+		defer ts.Close()
+		c := newGatewayTestClient(ts)
+		if _, err := c.GetMindnoteNodes(context.Background(), "mn1"); err != nil {
+			t.Fatalf("nodes: %v", err)
+		}
+		if _, err := c.CreateMindnoteNodes(context.Background(), "mn1", map[string]any{"nodes": []any{}}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		want := []string{
+			"GET /v1/mindnote/nodes?mindnote_id=mn1",
+			"POST /v1/mindnote/nodes/create?mindnote_id=mn1",
+		}
+		for i, w := range want {
+			if paths[i] != w {
+				t.Fatalf("call %d = %q, want %q", i, paths[i], w)
+			}
+		}
+	})
+
+	t.Run("local", func(t *testing.T) {
+		var paths []string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			paths = append(paths, r.Method+" "+r.URL.Path)
+			w.Write(feishuOK(map[string]any{"nodes": []any{}}))
+		}))
+		defer ts.Close()
+		c := newLocalTestClient(ts)
+		if _, err := c.GetMindnoteNodes(context.Background(), "mn1"); err != nil {
+			t.Fatalf("nodes: %v", err)
+		}
+		if _, err := c.CreateMindnoteNodes(context.Background(), "mn1", map[string]any{"nodes": []any{}}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		for _, p := range paths {
+			if !strings.HasSuffix(p, "/mindnote/v1/mindnotes/mn1/nodes") {
+				t.Fatalf("upstream path = %q", p)
+			}
+		}
+	})
+}
+
 func TestUploadDocsMedia(t *testing.T) {
 	t.Parallel()
 
