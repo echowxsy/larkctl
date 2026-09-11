@@ -74,6 +74,34 @@ larkctl wiki node URL_OR_TOKEN                 # Get wiki node info
 larkctl wiki create-node SPACE_ID --title "Page" --type docx --parent NODE_TOKEN
 ```
 
+### Diagrams in the document body (文本绘图 widget)
+
+```bash
+larkctl docs add-diagram DOC flow.mmd                      # render Mermaid inline
+cat state.mmd | larkctl docs add-diagram DOC - --index 3
+larkctl docs diagrams DOC                                  # list widgets + their source
+larkctl docs add-diagram DOC flow.mmd --replace doxcnXXX   # rewrite one in place
+```
+
+This is Feishu's only in-body Mermaid renderer. It is an add-ons block
+(`block_type: 40`, `component_type_id: blk_631fefbbae02400430b8f9f4`) whose
+`record` is a JSON **string** holding `{"data": "<mermaid>", "theme", "view"}` —
+the source lives in the block, so the diagram stays editable as text.
+
+Two things that do NOT work, so don't try them:
+- a ```mermaid code block — Feishu has no Mermaid code language (`lang="mermaid"`
+  does not even set `style.language`), so it renders as plain text;
+- the native flowchart/UML block (`block_type: 21`) — `1770029 block not
+  support to create`.
+
+The widget's record cannot be patched either (the block update API has no
+`add_ons` field), which is why `--replace` deletes and re-creates at the same
+index.
+
+**Widget or whiteboard?** Widget for an ordinary "a flowchart belongs here"
+diagram that will be edited as text. Whiteboard (`docs add-board`) when it needs
+hand layout, brand colours, or must be dragged around.
+
 ### Whiteboard
 ```bash
 larkctl board nodes WHITEBOARD_ID                      # List all nodes (use as template for create)
