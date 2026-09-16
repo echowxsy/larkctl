@@ -168,6 +168,12 @@ func allScopeGroupNames() []string {
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
+		// `larkctl cli` has already reported the failure through lark-cli's own
+		// output; exit with lark-cli's status instead of printing it again.
+		var exitErr *exitCodeError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.code)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -206,6 +212,7 @@ func newRootCmd() *cobra.Command {
 		newMailCmd(),
 		newMCPCmd(),
 		newUpgradeCmd(),
+		newCLICmd(),
 		newSchemaCmd(rootCmd),
 	)
 

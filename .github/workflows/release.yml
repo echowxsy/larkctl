@@ -32,4 +32,5 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/larkctl-*
+            dist/lark-cli_*
             dist/checksums.txt
