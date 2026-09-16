@@ -119,6 +119,7 @@ type blockData struct {
 	BlockType      int               `json:"block_type"`
 	ParentID       string            `json:"parent_id"`
 	Children       []string          `json:"children,omitempty"`
+	Page           *richText         `json:"page,omitempty"`
 	Text           *richText         `json:"text,omitempty"`
 	Heading1       *richText         `json:"heading1,omitempty"`
 	Heading2       *richText         `json:"heading2,omitempty"`
@@ -232,6 +233,15 @@ type tableBlock struct {
 type tableProperty struct {
 	ColumnSize int `json:"column_size"`
 	RowCount   int `json:"row_count"`
+	RowSize    int `json:"row_size"`
+}
+
+// rows reports the table's row count under either spelling the API uses.
+func (p tableProperty) rows() int {
+	if p.RowSize > 0 {
+		return p.RowSize
+	}
+	return p.RowCount
 }
 
 type calloutBlock struct {
@@ -247,6 +257,11 @@ type linkPreviewBlock struct {
 type viewBlock struct {
 	ViewType int `json:"view_type"`
 }
+
+// docTitleMarker tags the exported document title. It is the page block's own
+// text rather than a child block, so the diff-based updater must not treat it
+// as content to create.
+const docTitleMarker = "<!-- doc-title -->"
 
 func blocksToMarkdown(raw any, imageDir string) string {
 	b, _ := json.Marshal(raw)
@@ -274,34 +289,35 @@ func blocksToMarkdown(raw any, imageDir string) string {
 		return ""
 	}
 
-	// Render title
-	if pageBlock.Text != nil || pageBlock.Heading1 != nil {
-		rt := pageBlock.Text
-		if rt == nil {
-			rt = pageBlock.Heading1
-		}
-		title := renderElements(rt.Elements)
-		if title != "" {
-			sb.WriteString("# " + title + "\n\n")
-		}
-	} else {
-		// Page block stores title in "page" field which maps to elements
-		// Try raw extraction
-		var rawBlock map[string]any
-		rawBytes, _ := json.Marshal(pageBlock)
-		_ = json.Unmarshal(rawBytes, &rawBlock)
-		if page, ok := rawBlock["page"].(map[string]any); ok {
-			if elems, ok := page["elements"].([]any); ok {
-				title := renderRawElements(elems)
-				if title != "" {
-					sb.WriteString("# " + title + "\n\n")
-				}
-			}
+	// Render title. The docx API returns it under "page"; the older shapes use
+	// "text" or "heading1". Re-marshalling pageBlock to hunt for "page" cannot
+	// work — blockData drives that marshal, so the field has to be declared.
+	if rt := firstNonNil(pageBlock.Page, pageBlock.Text, pageBlock.Heading1); rt != nil {
+		if title := renderElements(rt.Elements); title != "" {
+			// The title belongs to the page block, not to any child block, so
+			// it carries no bid. Mark it, or `docs update` would see a
+			// bid-less heading and create a duplicate on every round-trip.
+			sb.WriteString(docTitleMarker + "\n# " + title + "\n\n")
 		}
 	}
 
 	renderChildren(&sb, pageBlock.Children, blockMap, imageDir, 0)
 	return sb.String()
+}
+
+// isListItemType reports whether a block renders as a markdown list item.
+func isListItemType(blockType int) bool {
+	return blockType == btBullet || blockType == btOrdered || blockType == btTodo
+}
+
+// firstNonNil returns the first non-nil rich text among the candidates.
+func firstNonNil(rts ...*richText) *richText {
+	for _, rt := range rts {
+		if rt != nil {
+			return rt
+		}
+	}
+	return nil
 }
 
 func renderChildren(sb *strings.Builder, children []string, blockMap map[string]*blockData, imageDir string, depth int) {
@@ -315,10 +331,18 @@ func renderChildren(sb *strings.Builder, children []string, blockMap map[string]
 }
 
 func renderBlock(sb *strings.Builder, block *blockData, blockMap map[string]*blockData, imageDir string, depth int) {
-	// Embed block ID for diff-based update (only for top-level renderable blocks)
-	if depth == 0 && block.BlockID != "" {
+	// Embed block ID for diff-based update. Nested blocks need one too: they
+	// are exported now, and without a bid the updater reads them as new
+	// content — for tables that is a hard error. List items are the exception:
+	// a comment line between items splits the list in the rendered markdown,
+	// and nested list items have never carried one.
+	if block.BlockID != "" && (depth == 0 || !isListItemType(block.BlockType)) {
 		sb.WriteString("<!-- bid:" + block.BlockID + " -->\n")
 	}
+
+	// Container types render their own children; everything else falls through
+	// to the generic descent at the end of this function.
+	childrenHandled := false
 
 	switch block.BlockType {
 	case btText:
@@ -340,10 +364,9 @@ func renderBlock(sb *strings.Builder, block *blockData, blockMap map[string]*blo
 			indent := strings.Repeat("  ", depth)
 			text := renderElements(block.Bullet.Elements)
 			sb.WriteString(indent + "- " + text + "\n")
-			if len(block.Children) > 0 {
-				renderChildren(sb, block.Children, blockMap, imageDir, depth+1)
-			}
 		}
+		renderChildren(sb, block.Children, blockMap, imageDir, depth+1)
+		childrenHandled = true
 
 	case btOrdered:
 		if block.Ordered != nil {
@@ -354,10 +377,9 @@ func renderBlock(sb *strings.Builder, block *blockData, blockMap map[string]*blo
 			}
 			text := renderElements(block.Ordered.Elements)
 			sb.WriteString(indent + seq + ". " + text + "\n")
-			if len(block.Children) > 0 {
-				renderChildren(sb, block.Children, blockMap, imageDir, depth+1)
-			}
 		}
+		renderChildren(sb, block.Children, blockMap, imageDir, depth+1)
+		childrenHandled = true
 
 	case btTodo:
 		if block.Todo != nil {
@@ -389,6 +411,7 @@ func renderBlock(sb *strings.Builder, block *blockData, blockMap map[string]*blo
 			}
 		}
 		sb.WriteString("\n")
+		childrenHandled = true
 
 	case btCode:
 		if block.Code != nil {
@@ -407,11 +430,7 @@ func renderBlock(sb *strings.Builder, block *blockData, blockMap map[string]*blo
 
 	case btImage:
 		if block.Image != nil {
-			if imageDir != "" {
-				sb.WriteString(fmt.Sprintf("![image](%s/%s)\n\n", imageDir, block.Image.Token))
-			} else {
-				sb.WriteString(fmt.Sprintf("![image](feishu-media://%s)\n\n", block.Image.Token))
-			}
+			sb.WriteString(imageMarkdown(block.Image.Token, imageDir) + "\n\n")
 		}
 
 	case btFile:
@@ -420,7 +439,9 @@ func renderBlock(sb *strings.Builder, block *blockData, blockMap map[string]*blo
 		}
 
 	case btTable:
-		renderTable(sb, block, blockMap)
+		// Children are the cells; renderTable walks them itself.
+		renderTable(sb, block, blockMap, imageDir)
+		childrenHandled = true
 
 	case btEquation:
 		if block.Equation != nil {
@@ -466,6 +487,7 @@ func renderBlock(sb *strings.Builder, block *blockData, blockMap map[string]*blo
 			}
 		}
 		sb.WriteString("\n")
+		childrenHandled = true
 
 	case btGrid:
 		// Grid layout - render columns sequentially
@@ -475,16 +497,17 @@ func renderBlock(sb *strings.Builder, block *blockData, blockMap map[string]*blo
 				renderChildren(sb, child.Children, blockMap, imageDir, depth)
 			}
 		}
+		childrenHandled = true
 
 	case btGridColumn:
 		// Grid column - render children directly
 		renderChildren(sb, block.Children, blockMap, imageDir, depth)
+		childrenHandled = true
 
 	case btIframe:
 		// Embedded iframe - render as link if URL available
-		if len(block.Children) > 0 {
-			renderChildren(sb, block.Children, blockMap, imageDir, depth)
-		}
+		renderChildren(sb, block.Children, blockMap, imageDir, depth)
+		childrenHandled = true
 
 	case btLinkPreview:
 		if block.LinkPreview != nil && block.LinkPreview.URL != "" {
@@ -509,28 +532,44 @@ func renderBlock(sb *strings.Builder, block *blockData, blockMap map[string]*blo
 		sb.WriteString("[Board]\n\n")
 
 	case btView:
-		if len(block.Children) > 0 {
-			renderChildren(sb, block.Children, blockMap, imageDir, depth)
-		}
+		renderChildren(sb, block.Children, blockMap, imageDir, depth)
+		childrenHandled = true
 
 	default:
 		// For unknown types with children, try rendering children
-		if len(block.Children) > 0 {
-			renderChildren(sb, block.Children, blockMap, imageDir, depth)
-		}
+		renderChildren(sb, block.Children, blockMap, imageDir, depth)
+		childrenHandled = true
+	}
+
+	// Feishu nests blocks under ordinary text and heading parents — a table,
+	// an image or another paragraph can all hang off a paragraph. Without this
+	// descent those subtrees never render at all. depth+1 keeps the <!-- bid -->
+	// markers on top-level blocks only, which is what `docs update` diffs against.
+	if !childrenHandled {
+		renderChildren(sb, block.Children, blockMap, imageDir, depth+1)
 	}
 }
 
-func renderTable(sb *strings.Builder, block *blockData, blockMap map[string]*blockData) {
+func renderTable(sb *strings.Builder, block *blockData, blockMap map[string]*blockData, imageDir string) {
 	if block.Table == nil {
 		return
 	}
-	cols := block.Table.Property.ColumnSize
-	if cols <= 0 {
+	cells := block.Table.Cells
+	if len(cells) == 0 {
 		return
 	}
-	cells := block.Table.Cells
-	rows := len(cells) / cols
+	// column_size is normally present, but fall back to the row count rather
+	// than dropping the whole table when it is missing or zero.
+	cols := block.Table.Property.ColumnSize
+	if cols <= 0 {
+		if rows := block.Table.Property.rows(); rows > 0 {
+			cols = (len(cells) + rows - 1) / rows
+		}
+	}
+	if cols <= 0 {
+		cols = len(cells)
+	}
+	rows := (len(cells) + cols - 1) / cols
 
 	for r := 0; r < rows; r++ {
 		sb.WriteString("|")
@@ -538,12 +577,11 @@ func renderTable(sb *strings.Builder, block *blockData, blockMap map[string]*blo
 			idx := r*cols + c
 			cellText := ""
 			if idx < len(cells) {
-				cellBlock, ok := blockMap[cells[idx]]
-				if ok {
-					cellText = renderCellContent(cellBlock, blockMap)
+				if cellBlock, ok := blockMap[cells[idx]]; ok {
+					cellText = renderCellContent(cellBlock, blockMap, imageDir)
 				}
 			}
-			sb.WriteString(" " + strings.ReplaceAll(cellText, "\n", " ") + " |")
+			sb.WriteString(" " + cellText + " |")
 		}
 		sb.WriteString("\n")
 		if r == 0 {
@@ -557,19 +595,46 @@ func renderTable(sb *strings.Builder, block *blockData, blockMap map[string]*blo
 	sb.WriteString("\n")
 }
 
-func renderCellContent(cell *blockData, blockMap map[string]*blockData) string {
+// cellPipe escapes the characters that would otherwise break out of a
+// markdown table cell.
+var cellPipe = strings.NewReplacer("|", "\\|", "\n", " ", "\r", " ")
+
+// renderCellContent flattens a cell's whole subtree into one inline string.
+// Cells hold real blocks — paragraphs, lists, and images — so walking only the
+// direct children's rich text silently drops nested text and every image.
+func renderCellContent(cell *blockData, blockMap map[string]*blockData, imageDir string) string {
 	var parts []string
-	for _, childID := range cell.Children {
-		child, ok := blockMap[childID]
-		if !ok {
-			continue
+	var walk func(ids []string, depth int)
+	walk = func(ids []string, depth int) {
+		if depth > 16 {
+			return
 		}
-		rt := getContentRT(child)
-		if rt != nil {
-			parts = append(parts, renderElements(rt.Elements))
+		for _, id := range ids {
+			child, ok := blockMap[id]
+			if !ok {
+				continue
+			}
+			if child.BlockType == btImage && child.Image != nil {
+				parts = append(parts, imageMarkdown(child.Image.Token, imageDir))
+			} else if rt := getContentRT(child); rt != nil {
+				if text := renderElements(rt.Elements); text != "" {
+					parts = append(parts, text)
+				}
+			}
+			walk(child.Children, depth+1)
 		}
 	}
-	return strings.Join(parts, " ")
+	walk(cell.Children, 0)
+	return cellPipe.Replace(strings.Join(parts, " "))
+}
+
+// imageMarkdown renders one image reference. Without --image-dir the token is
+// emitted as a feishu-media:// URI so the reference is still resolvable.
+func imageMarkdown(token, imageDir string) string {
+	if imageDir != "" {
+		return fmt.Sprintf("![image](%s/%s)", imageDir, token)
+	}
+	return fmt.Sprintf("![image](feishu-media://%s)", token)
 }
 
 func getHeadingRT(b *blockData) *richText {
@@ -886,6 +951,19 @@ func markdownToBlocksWithIDs(md string) ([]mdBlockEntry, error) {
 		if strings.HasPrefix(line, "<!-- bid:") && strings.HasSuffix(line, " -->") {
 			currentBID = strings.TrimSuffix(strings.TrimPrefix(line, "<!-- bid:"), " -->")
 			i++
+			continue
+		}
+
+		// Document title: rendered for readability but it is the page block's
+		// own text, not a child block. Drop it and the heading line after it.
+		if trimmed == docTitleMarker {
+			i++
+			for i < len(lines) && strings.TrimSpace(lines[i]) == "" {
+				i++
+			}
+			if i < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i]), "#") {
+				i++
+			}
 			continue
 		}
 
@@ -1521,7 +1599,9 @@ func blockComparableContent(block *blockData, blockMap map[string]*blockData) st
 		}
 	case btTable:
 		var sb strings.Builder
-		renderTable(&sb, block, blockMap)
+		// Comparison must not depend on --image-dir, so use the stable
+		// feishu-media:// form for any images inside cells.
+		renderTable(&sb, block, blockMap, "")
 		return strings.TrimSpace(sb.String())
 	case btEquation:
 		if block.Equation != nil {

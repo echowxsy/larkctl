@@ -533,7 +533,7 @@ func TestBlocksToMarkdown(t *testing.T) {
 					},
 				},
 			},
-			want: "# Doc Title\n\n<!-- bid:text1 -->\nHello world\n\n",
+			want: docTitleMarker + "\n# Doc Title\n\n<!-- bid:text1 -->\nHello world\n\n",
 		},
 		{
 			name: "heading levels",
@@ -771,7 +771,7 @@ func TestBlocksToMarkdownPageTitle(t *testing.T) {
 		},
 	}
 	got := blocksToMarkdown(raw, "")
-	if !strings.HasPrefix(got, "# Title via H1\n") {
+	if !strings.HasPrefix(got, docTitleMarker+"\n# Title via H1\n") {
 		t.Errorf("expected title from heading1, got %q", got)
 	}
 }
@@ -866,7 +866,7 @@ func TestRenderTable(t *testing.T) {
 	}
 
 	var sb strings.Builder
-	renderTable(&sb, blockMap["table1"], blockMap)
+	renderTable(&sb, blockMap["table1"], blockMap, "")
 	got := sb.String()
 
 	if !strings.Contains(got, "| Header A | Header B |") {
@@ -883,7 +883,7 @@ func TestRenderTable(t *testing.T) {
 func TestRenderTableNilTable(t *testing.T) {
 	t.Parallel()
 	var sb strings.Builder
-	renderTable(&sb, &blockData{BlockType: btTable}, nil)
+	renderTable(&sb, &blockData{BlockType: btTable}, nil, "")
 	if sb.String() != "" {
 		t.Errorf("expected empty output for nil table, got %q", sb.String())
 	}
@@ -892,7 +892,7 @@ func TestRenderTableNilTable(t *testing.T) {
 func TestRenderTableZeroCols(t *testing.T) {
 	t.Parallel()
 	var sb strings.Builder
-	renderTable(&sb, &blockData{BlockType: btTable, Table: &tableBlock{Property: tableProperty{ColumnSize: 0}}}, nil)
+	renderTable(&sb, &blockData{BlockType: btTable, Table: &tableBlock{Property: tableProperty{ColumnSize: 0}}}, nil, "")
 	if sb.String() != "" {
 		t.Errorf("expected empty output for zero cols, got %q", sb.String())
 	}
@@ -921,7 +921,7 @@ func TestRenderCellContent(t *testing.T) {
 		},
 	}
 
-	got := renderCellContent(blockMap["cell1"], blockMap)
+	got := renderCellContent(blockMap["cell1"], blockMap, "")
 	if got != "part1 part2" {
 		t.Errorf("renderCellContent() = %q, want %q", got, "part1 part2")
 	}
@@ -936,7 +936,7 @@ func TestRenderCellContentMissingChild(t *testing.T) {
 			Children:  []string{"nonexistent"},
 		},
 	}
-	got := renderCellContent(blockMap["cell1"], blockMap)
+	got := renderCellContent(blockMap["cell1"], blockMap, "")
 	if got != "" {
 		t.Errorf("renderCellContent() = %q, want empty", got)
 	}
@@ -2072,27 +2072,38 @@ func TestRenderChildrenMissingBlock(t *testing.T) {
 
 // --- Block ID embedding test ---
 
-func TestRenderBlockBidOnlyAtDepthZero(t *testing.T) {
+// Bid markers follow block identity, not nesting depth: docs update has to
+// recognise a nested block as existing. Only list items are exempt, because a
+// comment line between items breaks the list in rendered markdown.
+func TestRenderBlockBidAtAnyDepthExceptListItems(t *testing.T) {
 	t.Parallel()
 
-	block := &blockData{
+	text := &blockData{
 		BlockID:   "myblock",
 		BlockType: btText,
 		Text:      &richText{Elements: []element{{TextRun: &textRun{Content: "text"}}}},
 	}
-
-	// Depth 0 - should have bid
-	var sb0 strings.Builder
-	renderBlock(&sb0, block, nil, "", 0)
-	if !strings.Contains(sb0.String(), "<!-- bid:myblock -->") {
-		t.Errorf("depth 0 should contain bid, got %q", sb0.String())
+	for _, depth := range []int{0, 1, 3} {
+		var sb strings.Builder
+		renderBlock(&sb, text, nil, "", depth)
+		if !strings.Contains(sb.String(), "<!-- bid:myblock -->") {
+			t.Errorf("depth %d should contain bid, got %q", depth, sb.String())
+		}
 	}
 
-	// Depth 1 - should NOT have bid
-	var sb1 strings.Builder
-	renderBlock(&sb1, block, nil, "", 1)
+	item := &blockData{
+		BlockID:   "li",
+		BlockType: btBullet,
+		Bullet:    &richText{Elements: []element{{TextRun: &textRun{Content: "item"}}}},
+	}
+	var sb0, sb1 strings.Builder
+	renderBlock(&sb0, item, nil, "", 0)
+	if !strings.Contains(sb0.String(), "<!-- bid:li -->") {
+		t.Errorf("top-level list item should contain bid, got %q", sb0.String())
+	}
+	renderBlock(&sb1, item, nil, "", 1)
 	if strings.Contains(sb1.String(), "<!-- bid:") {
-		t.Errorf("depth 1 should not contain bid, got %q", sb1.String())
+		t.Errorf("nested list item should not contain bid, got %q", sb1.String())
 	}
 }
 
@@ -2419,5 +2430,224 @@ func TestMentionsKeepExportAndDiffInSync(t *testing.T) {
 	comparable := blockComparableContent(block, map[string]*blockData{"b1": block})
 	if comparable != "Owner: @ou_abc" {
 		t.Fatalf("comparable = %q", comparable)
+	}
+}
+
+// --- regression: blocks nested under non-container parents ---
+
+// Feishu hangs tables, images and paragraphs off ordinary text/heading blocks.
+// Those subtrees used to be dropped entirely by the markdown exporter.
+func TestRenderBlockDescendsIntoTextChildren(t *testing.T) {
+	t.Parallel()
+	blockMap := map[string]*blockData{
+		"p1": {
+			BlockID:   "p1",
+			BlockType: btText,
+			Text:      &richText{Elements: []element{{TextRun: &textRun{Content: "lead-in"}}}},
+			Children:  []string{"tbl", "nested"},
+		},
+		"tbl": {
+			BlockID:   "tbl",
+			BlockType: btTable,
+			Table:     &tableBlock{Cells: []string{"c1", "c2"}, Property: tableProperty{ColumnSize: 2}},
+		},
+		"c1":     {BlockID: "c1", BlockType: btTableCell, Children: []string{"c1t"}},
+		"c2":     {BlockID: "c2", BlockType: btTableCell, Children: []string{"c2t"}},
+		"c1t":    {BlockID: "c1t", BlockType: btText, Text: &richText{Elements: []element{{TextRun: &textRun{Content: "A"}}}}},
+		"c2t":    {BlockID: "c2t", BlockType: btText, Text: &richText{Elements: []element{{TextRun: &textRun{Content: "B"}}}}},
+		"nested": {BlockID: "nested", BlockType: btText, Text: &richText{Elements: []element{{TextRun: &textRun{Content: "buried text"}}}}},
+	}
+	var sb strings.Builder
+	renderBlock(&sb, blockMap["p1"], blockMap, "", 0)
+	got := sb.String()
+
+	for _, want := range []string{"lead-in", "| A | B |", "buried text"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	// Nested blocks carry a bid too, or docs update reads them as new content
+	// (and rejects a bid-less table outright).
+	for _, want := range []string{"<!-- bid:p1 -->", "<!-- bid:tbl -->", "<!-- bid:nested -->"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in:\n%s", want, got)
+		}
+	}
+	// Cell contents are inlined into the table row, so they get no marker.
+	if strings.Contains(got, "<!-- bid:c1t -->") {
+		t.Errorf("table cell content must not emit a bid marker:\n%s", got)
+	}
+}
+
+// A comment line between list items splits the list in rendered markdown, so
+// nested list items stay marker-free — as they always have been.
+func TestNestedListItemsHaveNoBidMarker(t *testing.T) {
+	t.Parallel()
+	blockMap := map[string]*blockData{
+		"b1": {
+			BlockID: "b1", BlockType: btBullet,
+			Bullet:   &richText{Elements: []element{{TextRun: &textRun{Content: "Parent"}}}},
+			Children: []string{"b2"},
+		},
+		"b2": {
+			BlockID: "b2", BlockType: btBullet,
+			Bullet: &richText{Elements: []element{{TextRun: &textRun{Content: "Child"}}}},
+		},
+	}
+	var sb strings.Builder
+	renderBlock(&sb, blockMap["b1"], blockMap, "", 0)
+	if got := sb.String(); got != "<!-- bid:b1 -->\n- Parent\n  - Child\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestRenderBlockDescendsIntoHeadingChildren(t *testing.T) {
+	t.Parallel()
+	blockMap := map[string]*blockData{
+		"h": {
+			BlockID:   "h",
+			BlockType: btHeading2,
+			Heading2:  &richText{Elements: []element{{TextRun: &textRun{Content: "Section"}}}},
+			Children:  []string{"kid"},
+		},
+		"kid": {BlockID: "kid", BlockType: btText, Text: &richText{Elements: []element{{TextRun: &textRun{Content: "under heading"}}}}},
+	}
+	var sb strings.Builder
+	renderBlock(&sb, blockMap["h"], blockMap, "", 0)
+	if got := sb.String(); !strings.Contains(got, "under heading") {
+		t.Errorf("heading child dropped:\n%s", got)
+	}
+}
+
+func TestRenderTableNotDoubleRendered(t *testing.T) {
+	t.Parallel()
+	blockMap := map[string]*blockData{
+		"tbl": {
+			BlockID:   "tbl",
+			BlockType: btTable,
+			Children:  []string{"c1"},
+			Table:     &tableBlock{Cells: []string{"c1"}, Property: tableProperty{ColumnSize: 1}},
+		},
+		"c1":  {BlockID: "c1", BlockType: btTableCell, Children: []string{"c1t"}},
+		"c1t": {BlockID: "c1t", BlockType: btText, Text: &richText{Elements: []element{{TextRun: &textRun{Content: "once"}}}}},
+	}
+	var sb strings.Builder
+	renderBlock(&sb, blockMap["tbl"], blockMap, "", 0)
+	if n := strings.Count(sb.String(), "once"); n != 1 {
+		t.Errorf("cell text rendered %d times, want 1:\n%s", n, sb.String())
+	}
+}
+
+func TestRenderTableColumnSizeFallback(t *testing.T) {
+	t.Parallel()
+	blockMap := map[string]*blockData{
+		"c1":  {BlockID: "c1", BlockType: btTableCell, Children: []string{"c1t"}},
+		"c2":  {BlockID: "c2", BlockType: btTableCell, Children: []string{"c2t"}},
+		"c1t": {BlockID: "c1t", BlockType: btText, Text: &richText{Elements: []element{{TextRun: &textRun{Content: "X"}}}}},
+		"c2t": {BlockID: "c2t", BlockType: btText, Text: &richText{Elements: []element{{TextRun: &textRun{Content: "Y"}}}}},
+	}
+	// column_size absent, row_size present: 2 cells over 1 row => 2 columns.
+	block := &blockData{BlockType: btTable, Table: &tableBlock{
+		Cells:    []string{"c1", "c2"},
+		Property: tableProperty{RowSize: 1},
+	}}
+	var sb strings.Builder
+	renderTable(&sb, block, blockMap, "")
+	if got := sb.String(); !strings.Contains(got, "| X | Y |") {
+		t.Errorf("column_size fallback failed, got:\n%s", got)
+	}
+}
+
+func TestRenderCellContentImageAndNesting(t *testing.T) {
+	t.Parallel()
+	blockMap := map[string]*blockData{
+		"cell": {BlockID: "cell", BlockType: btTableCell, Children: []string{"img", "p"}},
+		"img":  {BlockID: "img", BlockType: btImage, Image: &imageBlock{Token: "tok1"}},
+		"p": {
+			BlockID: "p", BlockType: btText,
+			Text:     &richText{Elements: []element{{TextRun: &textRun{Content: "outer"}}}},
+			Children: []string{"deep"},
+		},
+		"deep": {BlockID: "deep", BlockType: btText, Text: &richText{Elements: []element{{TextRun: &textRun{Content: "inner"}}}}},
+	}
+	got := renderCellContent(blockMap["cell"], blockMap, "images")
+	for _, want := range []string{"![image](images/tok1)", "outer", "inner"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("renderCellContent() = %q, missing %q", got, want)
+		}
+	}
+
+	noDir := renderCellContent(blockMap["cell"], blockMap, "")
+	if !strings.Contains(noDir, "![image](feishu-media://tok1)") {
+		t.Errorf("without image dir = %q", noDir)
+	}
+}
+
+func TestRenderCellContentEscapesPipe(t *testing.T) {
+	t.Parallel()
+	blockMap := map[string]*blockData{
+		"cell": {BlockID: "cell", BlockType: btTableCell, Children: []string{"t"}},
+		"t":    {BlockID: "t", BlockType: btText, Text: &richText{Elements: []element{{TextRun: &textRun{Content: "a|b\nc"}}}}},
+	}
+	got := renderCellContent(blockMap["cell"], blockMap, "")
+	if strings.ContainsAny(got, "\n") || !strings.Contains(got, `a\|b`) {
+		t.Errorf("cell content not escaped: %q", got)
+	}
+}
+
+func TestBlocksToMarkdownRendersPageTitle(t *testing.T) {
+	t.Parallel()
+	raw := map[string]any{"items": []any{
+		map[string]any{
+			"block_id": "root", "block_type": btPage,
+			"page":     map[string]any{"elements": []any{map[string]any{"text_run": map[string]any{"content": "Doc Title"}}}},
+			"children": []any{"b1"},
+		},
+		map[string]any{
+			"block_id": "b1", "block_type": btText,
+			"text": map[string]any{"elements": []any{map[string]any{"text_run": map[string]any{"content": "body"}}}},
+		},
+	}}
+	got := blocksToMarkdown(raw, "")
+	if !strings.HasPrefix(got, docTitleMarker+"\n# Doc Title\n\n") {
+		t.Errorf("page title missing, got:\n%s", got)
+	}
+	if !strings.Contains(got, "body") {
+		t.Errorf("body missing, got:\n%s", got)
+	}
+}
+
+// The exported title must survive a round-trip without being mistaken for a
+// new heading block — otherwise every export→update cycle duplicates it.
+func TestDocTitleIsNotAnUpdatableBlock(t *testing.T) {
+	t.Parallel()
+	raw := map[string]any{"items": []any{
+		map[string]any{
+			"block_id": "root", "block_type": btPage,
+			"page":     map[string]any{"elements": []any{map[string]any{"text_run": map[string]any{"content": "Doc Title"}}}},
+			"children": []any{"b1"},
+		},
+		map[string]any{
+			"block_id": "b1", "block_type": btText,
+			"text": map[string]any{"elements": []any{map[string]any{"text_run": map[string]any{"content": "body"}}}},
+		},
+	}}
+	md := blocksToMarkdown(raw, "")
+	if !strings.Contains(md, "# Doc Title") {
+		t.Fatalf("title not exported:\n%s", md)
+	}
+
+	entries, err := parseMarkdownWithIDs(md)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(entries) != 1 {
+		for _, e := range entries {
+			t.Logf("entry bid=%q type=%d", e.BlockID, e.BlockType)
+		}
+		t.Fatalf("got %d entries, want 1 (the title must not become a block)", len(entries))
+	}
+	if entries[0].BlockID != "b1" {
+		t.Errorf("entry bid = %q, want b1", entries[0].BlockID)
 	}
 }

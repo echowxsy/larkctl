@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"unicode/utf8"
 )
 
 // printOutput dispatches to the appropriate formatter based on outputFormat.
@@ -52,6 +53,11 @@ func printTable(w io.Writer, data any) {
 }
 
 // printCSV writes CSV output.
+//
+// Unlike the table renderer, CSV is consumed by programs, so it never
+// truncates a value and it expands one level of nested objects into their own
+// columns — otherwise a bitable record collapses into a single opaque JSON
+// blob and the output stops being a table at all.
 func printCSV(w io.Writer, data any) {
 	rows, cols := extractRows(data)
 	if len(rows) == 0 {
@@ -59,16 +65,69 @@ func printCSV(w io.Writer, data any) {
 		return
 	}
 
+	cols, flat := flattenRows(rows, cols)
 	cw := csv.NewWriter(w)
 	_ = cw.Write(cols)
-	for _, row := range rows {
+	for _, row := range flat {
 		record := make([]string, len(cols))
 		for i, col := range cols {
-			record[i] = formatValue(row[col])
+			record[i] = row[col]
 		}
 		_ = cw.Write(record)
 	}
 	cw.Flush()
+}
+
+// flattenRows expands map-valued columns into "col.key" columns. Column order
+// follows the input columns; the sub-keys of each expanded column are sorted so
+// the output is stable across runs.
+func flattenRows(rows []map[string]any, cols []string) ([]string, []map[string]string) {
+	subKeys := map[string]map[string]bool{}
+	for _, row := range rows {
+		for _, col := range cols {
+			if m, ok := row[col].(map[string]any); ok {
+				if subKeys[col] == nil {
+					subKeys[col] = map[string]bool{}
+				}
+				for k := range m {
+					subKeys[col][k] = true
+				}
+			}
+		}
+	}
+
+	outCols := make([]string, 0, len(cols))
+	for _, col := range cols {
+		if subs, ok := subKeys[col]; ok && len(subs) > 0 {
+			names := make([]string, 0, len(subs))
+			for k := range subs {
+				names = append(names, k)
+			}
+			sort.Strings(names)
+			for _, k := range names {
+				outCols = append(outCols, col+"."+k)
+			}
+			continue
+		}
+		outCols = append(outCols, col)
+	}
+
+	out := make([]map[string]string, 0, len(rows))
+	for _, row := range rows {
+		rec := map[string]string{}
+		for _, col := range cols {
+			if subs, ok := subKeys[col]; ok && len(subs) > 0 {
+				m, _ := row[col].(map[string]any)
+				for k := range subs {
+					rec[col+"."+k] = formatValueFull(m[k])
+				}
+				continue
+			}
+			rec[col] = formatValueFull(row[col])
+		}
+		out = append(out, rec)
+	}
+	return outCols, out
 }
 
 // extractRows normalizes API responses to rows + column names.
@@ -195,9 +254,15 @@ func sortedKeys(keys []string) []string {
 	return sorted
 }
 
-// formatValue formats a value for table/CSV output.
-// Strings are returned as-is, float64 as int if whole, nested objects as truncated JSON (max 60 chars).
+// formatValue formats a value for table output. Nested objects are rendered as
+// JSON truncated to 60 characters to keep columns readable.
 func formatValue(v any) string {
+	return truncateRunes(formatValueFull(v), 60)
+}
+
+// formatValueFull formats a value without any truncation. Strings are returned
+// as-is, whole float64 as integers, everything else as JSON.
+func formatValueFull(v any) string {
 	if v == nil {
 		return ""
 	}
@@ -221,10 +286,17 @@ func formatValue(v any) string {
 		if err != nil {
 			return fmt.Sprintf("%v", val)
 		}
-		s := string(b)
-		if len(s) > 60 {
-			s = s[:57] + "..."
-		}
+		return string(b)
+	}
+}
+
+// truncateRunes shortens s to at most max characters, appending an ellipsis.
+// It counts runes, not bytes: slicing bytes splits multi-byte UTF-8 characters
+// and yields output that is not valid UTF-8 at all.
+func truncateRunes(s string, max int) string {
+	if max <= 3 || utf8.RuneCountInString(s) <= max {
 		return s
 	}
+	runes := []rune(s)
+	return string(runes[:max-3]) + "..."
 }

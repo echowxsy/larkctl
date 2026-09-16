@@ -13,8 +13,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -101,7 +103,7 @@ var scopeGroups = map[string]struct {
 		// board:whiteboard:node:delete is deliberately not requested at login:
 		// apps without that permission enabled would fail the whole authorize
 		// page (error 20027). delete-nodes upgrades the session on demand.
-		Scopes:      "board:whiteboard:node:create board:whiteboard:node:read",
+		Scopes: "board:whiteboard:node:create board:whiteboard:node:read",
 	},
 	"calendar": {
 		Description: "Calendar events",
@@ -501,7 +503,7 @@ func downloadDocImages(ctx context.Context, client FeishuClient, input, dir stri
 	}
 	raw, err := client.GetDocumentBlocks(ctx, input)
 	if err != nil {
-		return err
+		return explainDocTarget(ctx, client, input, err)
 	}
 	b, _ := json.Marshal(raw)
 	if err := json.Unmarshal(b, &blocksResp); err != nil {
@@ -525,6 +527,140 @@ func downloadDocImages(ctx context.Context, client FeishuClient, input, dir stri
 		return nil
 	}
 	return downloadImages(ctx, client, images, dir)
+}
+
+// exportJobRetryable reports whether a failed export job is worth re-creating.
+// Feishu's own spelling of its server-side job timeout is "job_timetout"; it is
+// a property of the run, not of the document, so the same export usually
+// succeeds on a second attempt.
+func exportJobRetryable(msg string) bool {
+	m := strings.ToLower(msg)
+	return strings.Contains(m, "timetout") || strings.Contains(m, "timeout")
+}
+
+// runExport creates an export task and waits for it, re-creating the task when
+// the server reports a retryable failure.
+func runExport(ctx context.Context, client FeishuClient, token, docType, format string, timeout time.Duration, retries int) (exportResult, error) {
+	var lastErr error
+	for attempt := 0; attempt <= retries; attempt++ {
+		if attempt > 0 {
+			fmt.Fprintf(os.Stderr, "export attempt %d/%d failed (%v); retrying...\n", attempt, retries+1, lastErr)
+		}
+		ticket, err := client.ExportCreate(ctx, token, docType, format)
+		if err != nil {
+			return exportResult{}, err
+		}
+		result, err := waitForExport(ctx, client, ticket, token, timeout)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if !exportJobRetryable(err.Error()) {
+			return result, err
+		}
+	}
+	return exportResult{}, fmt.Errorf("%w (after %d attempts; raise --timeout or retry later)", lastErr, retries+1)
+}
+
+// exportPollInterval is how long to wait between export status checks.
+// Declared as a variable so tests can shrink it.
+var exportPollInterval = 2 * time.Second
+
+// waitForExport polls an export task to completion.
+//
+// Large documents routinely need more than the old fixed 120s, and a single
+// transient ExportStatus error used to abort a job that was still running
+// server-side — which is why the same command failed in a batch and succeeded
+// when re-run alone. Transient polling errors are now retried, and the budget
+// is caller-controlled.
+func waitForExport(ctx context.Context, client FeishuClient, ticket, token string, timeout time.Duration) (exportResult, error) {
+	const maxPollErrors = 3
+	deadline := time.Now().Add(timeout)
+	pollErrors := 0
+	var result exportResult
+
+	for {
+		if time.Now().After(deadline) {
+			return result, fmt.Errorf("export timed out after %s; retry or raise --timeout", timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		case <-time.After(exportPollInterval):
+		}
+
+		r, err := client.ExportStatus(ctx, ticket, token)
+		if err != nil {
+			pollErrors++
+			if pollErrors >= maxPollErrors {
+				return result, err
+			}
+			fmt.Fprintf(os.Stderr, "warning: export status check failed (%d/%d): %v\n", pollErrors, maxPollErrors, err)
+			continue
+		}
+		pollErrors = 0
+		result = r
+
+		switch result.JobStatus {
+		case 0:
+			return result, nil
+		case 1, 2:
+			continue
+		default:
+			msg := result.ErrMsg
+			if msg == "" {
+				msg = fmt.Sprintf("job_status=%d", result.JobStatus)
+			}
+			return result, fmt.Errorf("export failed: %s", msg)
+		}
+	}
+}
+
+// feishuNotFoundCode is what the docx APIs return for a token that is not a
+// document — including a wiki node whose object is an uploaded file.
+const feishuNotFoundCode = "1770002"
+
+// explainDocTarget turns the docx APIs' opaque "not found" into an actionable
+// message when the target is a wiki node holding an uploaded file rather than a
+// Feishu document. Those nodes are real and readable, just not through the docx
+// endpoints, so reporting "not found" sends people to hunt for a permission or
+// link problem that does not exist.
+func explainDocTarget(ctx context.Context, client FeishuClient, input string, err error) error {
+	if err == nil || !strings.Contains(err.Error(), feishuNotFoundCode) {
+		return err
+	}
+	wikiData, wikiErr := client.GetWikiNode(ctx, input)
+	if wikiErr != nil {
+		return err
+	}
+	m, ok := wikiData.(map[string]any)
+	if !ok {
+		return err
+	}
+	node, ok := m["node"].(map[string]any)
+	if !ok {
+		return err
+	}
+	objType, _ := node["obj_type"].(string)
+	objToken, _ := node["obj_token"].(string)
+	if objType == "" || objType == "docx" || objType == "doc" || objToken == "" {
+		return err
+	}
+	title, _ := node["title"].(string)
+	switch objType {
+	case "file":
+		return fmt.Errorf("wiki node %q is an uploaded file (obj_type=file), not a Feishu document; "+
+			"download it with: larkctl drive download %s <path>", title, objToken)
+	case "sheet":
+		return fmt.Errorf("wiki node %q is a spreadsheet (obj_type=sheet), not a document; "+
+			"use: larkctl sheets meta %s", title, objToken)
+	case "bitable":
+		return fmt.Errorf("wiki node %q is a bitable (obj_type=bitable), not a document; "+
+			"use: larkctl bitable tables %s", title, objToken)
+	default:
+		return fmt.Errorf("wiki node %q has obj_type=%s, which the document commands do not support (obj_token %s)",
+			title, objType, objToken)
+	}
 }
 
 func downloadSheetImages(ctx context.Context, client FeishuClient, input, sheetID, dir string) error {
@@ -633,6 +769,81 @@ func countEmbedImages(data any) int {
 	return count
 }
 
+// extForContentType maps a media content-type to a file extension. Defaults to
+// .png, which is what the docx media endpoint returns for most inline images.
+func extForContentType(ct string) string {
+	switch {
+	case strings.Contains(ct, "jpeg"), strings.Contains(ct, "jpg"):
+		return ".jpg"
+	case strings.Contains(ct, "gif"):
+		return ".gif"
+	case strings.Contains(ct, "webp"):
+		return ".webp"
+	case strings.Contains(ct, "svg"):
+		return ".svg"
+	default:
+		return ".png"
+	}
+}
+
+// materializeExportImages downloads every image referenced by the exported
+// markdown into dir and rewrites the references to the real filenames.
+//
+// The references blocksToMarkdown emits carry no extension, so pairing
+// `docs export --image-dir` with a separate `larkctl images` run produced
+// broken links every time (images writes NNN_<token>.<ext>). Downloading here
+// makes --image-dir self-contained: what the markdown points at is what
+// lands on disk.
+func materializeExportImages(ctx context.Context, client FeishuClient, md, dir string) (string, error) {
+	refs := regexp.MustCompile(`!\[image\]\(`+regexp.QuoteMeta(dir)+`/([A-Za-z0-9_-]+)\)`).FindAllStringSubmatch(md, -1)
+	if len(refs) == 0 {
+		return md, nil
+	}
+	seen := map[string]bool{}
+	tokens := make([]string, 0, len(refs))
+	for _, m := range refs {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			tokens = append(tokens, m[1])
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return md, fmt.Errorf("create image dir: %w", err)
+	}
+
+	fmt.Printf("Downloading %d image(s) to %s/...\n", len(tokens), dir)
+	replacements := make([]string, 0, len(tokens)*2)
+	for i, token := range tokens {
+		tmpPath := filepath.Join(dir, token)
+		f, err := os.Create(tmpPath)
+		if err != nil {
+			return md, fmt.Errorf("create %s: %w", tmpPath, err)
+		}
+		ct, err := client.DownloadMedia(ctx, token, f)
+		f.Close()
+		if err != nil {
+			os.Remove(tmpPath)
+			// Leave the reference pointing at the extension-less name so the
+			// markdown still records which image belongs here.
+			fmt.Fprintf(os.Stderr, "  [%d/%d] FAILED %s: %v\n", i+1, len(tokens), token, err)
+			continue
+		}
+		finalPath := tmpPath + extForContentType(ct)
+		if finalPath != tmpPath {
+			if err := os.Rename(tmpPath, finalPath); err != nil {
+				return md, fmt.Errorf("rename %s: %w", tmpPath, err)
+			}
+		}
+		replacements = append(replacements,
+			fmt.Sprintf("![image](%s/%s)", dir, token),
+			fmt.Sprintf("![image](%s/%s)", dir, filepath.Base(finalPath)))
+	}
+	if len(replacements) == 0 {
+		return md, nil
+	}
+	return strings.NewReplacer(replacements...).Replace(md), nil
+}
+
 func downloadImages(ctx context.Context, client FeishuClient, images []imageEntry, dir string) error {
 	fmt.Printf("Found %d image(s), downloading...\n", len(images))
 
@@ -655,15 +866,7 @@ func downloadImages(ctx context.Context, client FeishuClient, images []imageEntr
 		}
 
 		// Rename with correct extension based on content-type
-		if strings.Contains(ct, "jpeg") || strings.Contains(ct, "jpg") {
-			ext = ".jpg"
-		} else if strings.Contains(ct, "gif") {
-			ext = ".gif"
-		} else if strings.Contains(ct, "webp") {
-			ext = ".webp"
-		} else if strings.Contains(ct, "svg") {
-			ext = ".svg"
-		}
+		ext = extForContentType(ct)
 		newFilename := fmt.Sprintf("%03d_%s%s", i+1, img.token, ext)
 		newFilepath := dir + "/" + newFilename
 		if newFilepath != filepath {
@@ -793,6 +996,7 @@ func newDocsCmd() *cobra.Command {
 				return err
 			}
 			data, err := client.GetDocumentInfo(cmd.Context(), args[0], documentType)
+			err = explainDocTarget(cmd.Context(), client, args[0], err)
 			if err != nil {
 				return err
 			}
@@ -812,6 +1016,7 @@ func newDocsCmd() *cobra.Command {
 				return err
 			}
 			data, err := client.GetDocumentBlocks(cmd.Context(), args[0])
+			err = explainDocTarget(cmd.Context(), client, args[0], err)
 			if err != nil {
 				return err
 			}
@@ -1042,6 +1247,8 @@ The JSON body is the Feishu create-blocks request body, e.g.:
 	permCmd.Flags().StringVar(&permFileType, "file-type", "docx", "type: doc|docx|sheet|bitable|folder|wiki")
 
 	var exportFormat, exportOutput, exportImageDir string
+	var exportTimeout time.Duration
+	var exportRetries int
 	exportCmd := &cobra.Command{
 		Use:   "export [document_url_or_token]",
 		Short: "Export document as pdf, docx, or markdown",
@@ -1056,9 +1263,15 @@ The JSON body is the Feishu create-blocks request body, e.g.:
 			if exportFormat == "md" || exportFormat == "markdown" {
 				raw, err := client.GetDocumentBlocks(cmd.Context(), args[0])
 				if err != nil {
-					return err
+					return explainDocTarget(cmd.Context(), client, args[0], err)
 				}
 				md := blocksToMarkdown(raw, exportImageDir)
+				if exportImageDir != "" {
+					md, err = materializeExportImages(cmd.Context(), client, md, exportImageDir)
+					if err != nil {
+						return err
+					}
+				}
 				outPath := exportOutput
 				if outPath == "" {
 					outPath = extractToken(args[0]) + ".md"
@@ -1091,37 +1304,11 @@ The JSON body is the Feishu create-blocks request body, e.g.:
 			}
 
 			fmt.Println("Creating export task...")
-			ticket, err := client.ExportCreate(cmd.Context(), token, "docx", exportFormat)
+			result, err := runExport(cmd.Context(), client, token, "docx", exportFormat, exportTimeout, exportRetries)
 			if err != nil {
 				return err
 			}
 
-			fmt.Println("Waiting for export...")
-			deadline := time.Now().Add(120 * time.Second)
-			var result exportResult
-			for {
-				if time.Now().After(deadline) {
-					return fmt.Errorf("export timeout")
-				}
-				time.Sleep(2 * time.Second)
-				result, err = client.ExportStatus(cmd.Context(), ticket, token)
-				if err != nil {
-					return err
-				}
-				switch result.JobStatus {
-				case 0:
-					goto done
-				case 1, 2:
-					continue
-				default:
-					msg := result.ErrMsg
-					if msg == "" {
-						msg = fmt.Sprintf("job_status=%d", result.JobStatus)
-					}
-					return fmt.Errorf("export failed: %s", msg)
-				}
-			}
-		done:
 			outPath := exportOutput
 			if outPath == "" {
 				name := result.FileName
@@ -1145,7 +1332,9 @@ The JSON body is the Feishu create-blocks request body, e.g.:
 	}
 	exportCmd.Flags().StringVarP(&exportFormat, "format", "f", "pdf", "export format: pdf, docx, or md")
 	exportCmd.Flags().StringVarP(&exportOutput, "output", "o", "", "output file path (default: <name>.<format>, use - for stdout)")
-	exportCmd.Flags().StringVar(&exportImageDir, "image-dir", "", "image path prefix in markdown (default: feishu-media:// URIs)")
+	exportCmd.Flags().DurationVar(&exportTimeout, "timeout", 120*time.Second, "how long to wait for the export task (e.g. 5m)")
+	exportCmd.Flags().IntVar(&exportRetries, "retries", 2, "re-create the export task this many times when the server times out")
+	exportCmd.Flags().StringVar(&exportImageDir, "image-dir", "", "download images into this dir and reference them from the markdown (default: feishu-media:// URIs)")
 
 	updateCmd := &cobra.Command{
 		Use:   "update [document_id_or_url] [markdown_file]",
@@ -1247,6 +1436,7 @@ Examples:
 				} `json:"items"`
 			}
 			raw, err := client.GetDocumentBlocks(cmd.Context(), rawURL)
+			err = explainDocTarget(cmd.Context(), client, rawURL, err)
 			if err != nil {
 				return err
 			}
@@ -1390,6 +1580,12 @@ func doDiffUpdate(ctx context.Context, client FeishuClient, docID string, entrie
 	// looks like a new block while its wrapper looks unreferenced and is deleted.
 	existingSet := map[string]bool{}
 	wrapperOf := map[string]string{}
+	// Blocks nested under a paragraph or heading are exported with their bid
+	// as well, so every known block counts as existing. Deletion still walks
+	// pageChildren only, so nested blocks are never removed by a diff.
+	for id := range blockMap {
+		existingSet[id] = true
+	}
 	for _, id := range pageChildren {
 		existingSet[id] = true
 		block := blockMap[id]
@@ -1872,6 +2068,8 @@ func newSheetsCmd() *cobra.Command {
 	}
 
 	var exportOutput string
+	var sheetsExportTimeout time.Duration
+	var sheetsExportRetries int
 	exportCmd := &cobra.Command{
 		Use:   "export [spreadsheet_url_or_token]",
 		Short: "Export spreadsheet as xlsx file",
@@ -1899,38 +2097,10 @@ func newSheetsCmd() *cobra.Command {
 			}
 
 			fmt.Println("Creating export task...")
-			ticket, err := client.ExportCreate(cmd.Context(), token, "sheet", "xlsx")
+			result, err := runExport(cmd.Context(), client, token, "sheet", "xlsx", sheetsExportTimeout, sheetsExportRetries)
 			if err != nil {
 				return err
 			}
-
-			fmt.Println("Waiting for export...")
-			deadline := time.Now().Add(120 * time.Second)
-			var result exportResult
-			for {
-				if time.Now().After(deadline) {
-					return fmt.Errorf("export timeout")
-				}
-				time.Sleep(2 * time.Second)
-
-				result, err = client.ExportStatus(cmd.Context(), ticket, token)
-				if err != nil {
-					return err
-				}
-				switch result.JobStatus {
-				case 0:
-					goto done
-				case 1, 2:
-					continue
-				default:
-					msg := result.ErrMsg
-					if msg == "" {
-						msg = fmt.Sprintf("job_status=%d", result.JobStatus)
-					}
-					return fmt.Errorf("export failed: %s", msg)
-				}
-			}
-		done:
 
 			outPath := exportOutput
 			if outPath == "" {
@@ -1956,6 +2126,8 @@ func newSheetsCmd() *cobra.Command {
 		},
 	}
 	exportCmd.Flags().StringVarP(&exportOutput, "output", "o", "", "output file path (default: <name>.xlsx)")
+	exportCmd.Flags().DurationVar(&sheetsExportTimeout, "timeout", 120*time.Second, "how long to wait for the export task (e.g. 5m)")
+	exportCmd.Flags().IntVar(&sheetsExportRetries, "retries", 2, "re-create the export task this many times when the server times out")
 
 	sheetsCmd.AddCommand(metaCmd, valuesCmd, updateCmd, appendCmd, exportCmd)
 	return sheetsCmd
@@ -2218,6 +2390,76 @@ Examples:
 	return driveCmd
 }
 
+// linkedTableRefs extracts the tables that a field list points at. Link fields
+// carry the target in property.table_id; table_name comes back empty when the
+// caller cannot read that table.
+func linkedTableRefs(fieldsData any) map[string]string {
+	refs := map[string]string{}
+	b, _ := json.Marshal(fieldsData)
+	var resp struct {
+		Items []struct {
+			FieldName string `json:"field_name"`
+			Property  struct {
+				TableID   string `json:"table_id"`
+				TableName string `json:"table_name"`
+			} `json:"property"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(b, &resp) != nil {
+		return refs
+	}
+	for _, f := range resp.Items {
+		if f.Property.TableID != "" {
+			refs[f.Property.TableID] = f.FieldName
+		}
+	}
+	return refs
+}
+
+// findUnlistedLinkedTables reports tables referenced by link fields that do not
+// appear in the app's table list — typically because the caller's role cannot
+// read them. Without this, an inaccessible linked table leaves no trace at all
+// and the table list looks complete.
+func findUnlistedLinkedTables(ctx context.Context, client FeishuClient, appToken string, tablesData any) []map[string]string {
+	b, _ := json.Marshal(tablesData)
+	var resp struct {
+		Items []struct {
+			TableID string `json:"table_id"`
+			Name    string `json:"name"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(b, &resp) != nil {
+		return nil
+	}
+	listed := map[string]bool{}
+	for _, t := range resp.Items {
+		listed[t.TableID] = true
+	}
+
+	var out []map[string]string
+	seen := map[string]bool{}
+	for _, t := range resp.Items {
+		fieldsData, err := client.ListBitableFields(ctx, appToken, t.TableID)
+		if err != nil {
+			continue
+		}
+		for refID, fieldName := range linkedTableRefs(fieldsData) {
+			if listed[refID] || seen[refID] {
+				continue
+			}
+			seen[refID] = true
+			out = append(out, map[string]string{
+				"table_id":       refID,
+				"referenced_by":  t.Name + "." + fieldName,
+				"reason":         "referenced by a link field but not returned by tables/list — usually no read permission",
+				"read_more_with": "larkctl bitable records " + appToken + " " + refID,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i]["table_id"] < out[j]["table_id"] })
+	return out
+}
+
 func newBitableCmd() *cobra.Command {
 	bitableCmd := &cobra.Command{
 		Use:   "bitable",
@@ -2242,6 +2484,7 @@ func newBitableCmd() *cobra.Command {
 		},
 	}
 
+	var checkLinks bool
 	tablesCmd := &cobra.Command{
 		Use:   "tables [app_token]",
 		Short: "List tables in a bitable app",
@@ -2255,10 +2498,18 @@ func newBitableCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if checkLinks {
+				if extra := findUnlistedLinkedTables(cmd.Context(), client, args[0], data); len(extra) > 0 {
+					merged := map[string]any{"tables": data, "linked_tables_not_listed": extra}
+					printJSON(merged)
+					return nil
+				}
+			}
 			printOutput(data)
 			return nil
 		},
 	}
+	tablesCmd.Flags().BoolVar(&checkLinks, "check-links", false, "also report tables referenced by link fields that this role cannot read")
 
 	fieldsCmd := &cobra.Command{
 		Use:   "fields [app_token] [table_id]",

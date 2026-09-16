@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -3266,14 +3267,28 @@ func TestDocsExportMdWithImageDirCmdNew(t *testing.T) {
 	tmp := t.TempDir()
 	outPath := tmp + "/test.md"
 
-	_, err := execCmd(t, "docs", "export", "doc123", "--format", "md", "--output", outPath, "--image-dir", "./images")
+	imgDir := tmp + "/images"
+	_, err := execCmd(t, "docs", "export", "doc123", "--format", "md", "--output", outPath, "--image-dir", imgDir)
 	if err != nil {
 		t.Fatalf("docs export md with image-dir: %v", err)
 	}
 
 	content, _ := os.ReadFile(outPath)
-	if !strings.Contains(string(content), "./images") {
+	if !strings.Contains(string(content), imgDir) {
 		t.Fatalf("expected image-dir prefix in output, got: %s", string(content))
+	}
+
+	// --image-dir downloads the images and the reference must name the file
+	// that actually landed — pairing it with `larkctl images` used to produce
+	// a reference with no extension and a file called NNN_<token>.<ext>.
+	refs := regexp.MustCompile(`!\[image\]\(([^)]+)\)`).FindAllStringSubmatch(string(content), -1)
+	if len(refs) == 0 {
+		t.Fatalf("no image references in output: %s", string(content))
+	}
+	for _, m := range refs {
+		if _, statErr := os.Stat(m[1]); statErr != nil {
+			t.Errorf("markdown references %s but it is not on disk: %v", m[1], statErr)
+		}
 	}
 }
 
