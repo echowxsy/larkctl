@@ -1504,7 +1504,8 @@ Examples:
 
 	docsCmd.AddCommand(infoCmd, blocksCmd, createBlocksCmd, deleteBlockCmd, commentsCmd,
 		searchCmd, createCmd, addCommentCmd, replyCommentCmd, resolveCommentCmd, permCmd, exportCmd, updateCmd, filesCmd,
-		newDocsAddImageCmd(), newDocsAddFileCmd(), newDocsAddLinkCmd(), newDocsAddMentionCmd())
+		newDocsAddImageCmd(), newDocsAddFileCmd(), newDocsAddLinkCmd(), newDocsAddMentionCmd(),
+		newDocsAddDiagramCmd(), newDocsDiagramsCmd())
 	return docsCmd
 }
 

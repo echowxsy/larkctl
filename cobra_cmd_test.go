@@ -3868,3 +3868,71 @@ func TestDocsAddLinkAndMentionCmds(t *testing.T) {
 		}
 	})
 }
+
+// ---- 文本绘图 widget helpers ----
+
+func TestDiagramBlockAndSources(t *testing.T) {
+	t.Parallel()
+
+	block, err := diagramBlock("flowchart TD\n  A --> B\n", "default", "codeChart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if block["block_type"] != diagramBlockType {
+		t.Errorf("block_type = %v, want %d", block["block_type"], diagramBlockType)
+	}
+	addOns, _ := block["add_ons"].(map[string]any)
+	if addOns["component_type_id"] != diagramWidgetTypeID {
+		t.Errorf("component_type_id = %v", addOns["component_type_id"])
+	}
+	// The record must be a JSON *string*, not a nested object — Feishu rejects
+	// the object form.
+	record, ok := addOns["record"].(string)
+	if !ok {
+		t.Fatalf("record = %T, want string", addOns["record"])
+	}
+	var rec diagramRecord
+	if err := json.Unmarshal([]byte(record), &rec); err != nil {
+		t.Fatalf("record is not valid JSON: %v", err)
+	}
+	if rec.Data != "flowchart TD\n  A --> B\n" || rec.View != "codeChart" {
+		t.Errorf("record = %+v", rec)
+	}
+
+	// Round-trip: what the block API returns is what diagramSources reads.
+	blocks := map[string]any{"items": []any{
+		map[string]any{"block_id": "b1", "block_type": 2},
+		map[string]any{"block_id": "b2", "block_type": diagramBlockType,
+			"add_ons": map[string]any{"component_type_id": diagramWidgetTypeID, "record": record}},
+		// A different widget type must not be picked up.
+		map[string]any{"block_id": "b3", "block_type": diagramBlockType,
+			"add_ons": map[string]any{"component_type_id": "blk_other", "record": record}},
+	}}
+	got := diagramSources(blocks)
+	if len(got) != 1 || got[0][0] != "b2" || !strings.HasPrefix(got[0][1], "flowchart TD") {
+		t.Fatalf("diagramSources = %v", got)
+	}
+}
+
+func TestDiagramBlockPosition(t *testing.T) {
+	t.Parallel()
+
+	blocks := map[string]any{"items": []any{
+		map[string]any{"block_id": "page", "block_type": 1,
+			"children": []any{"h1", "w1", "p1"}},
+		map[string]any{"block_id": "h1", "parent_id": "page"},
+		map[string]any{"block_id": "w1", "parent_id": "page"},
+		map[string]any{"block_id": "p1", "parent_id": "page"},
+	}}
+	parent, index, err := diagramBlockPosition(blocks, "w1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if parent != "page" || index != 1 {
+		t.Errorf("position = %q, %d, want page, 1", parent, index)
+	}
+
+	if _, _, err := diagramBlockPosition(blocks, "nope"); err == nil {
+		t.Error("expected an error for a block that is not in the document")
+	}
+}
