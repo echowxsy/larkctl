@@ -207,6 +207,9 @@ func (s *cliSidecar) relay(r *http.Request, body []byte) (*http.Response, error)
 			}
 		}
 		req.Header.Set("Authorization", "Bearer "+s.gateway.session())
+		// Name larkctl first so the gateway can tell which larkctl relayed the
+		// call; lark-cli's own agent follows.
+		req.Header.Set("User-Agent", strings.TrimSpace(userAgent()+" "+r.Header.Get("User-Agent")))
 		return s.http.Do(req)
 	}
 

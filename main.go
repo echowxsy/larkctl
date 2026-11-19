@@ -4326,6 +4326,10 @@ func requireScopes(ctx context.Context, client FeishuClient, scopes string) erro
 		return nil // local mode: scopes managed by app config
 	}
 
+	if cachedScopesCover(gc.scopeCachePath, gc.session(), scopes) {
+		return nil
+	}
+
 	resp, err := gc.UpgradeScopes(ctx, scopes)
 	if err != nil {
 		return fmt.Errorf("check scopes: %w", err)
@@ -4333,6 +4337,8 @@ func requireScopes(ctx context.Context, client FeishuClient, scopes string) erro
 
 	needed, _ := resp["upgrade_needed"].(bool)
 	if !needed {
+		granted, _ := resp["scopes"].(string)
+		storeCachedScopes(gc.scopeCachePath, gc.session(), granted)
 		return nil
 	}
 
@@ -4353,6 +4359,7 @@ func requireScopes(ctx context.Context, client FeishuClient, scopes string) erro
 			continue
 		}
 		if hasAllScopes(current, scopes) {
+			storeCachedScopes(gc.scopeCachePath, gc.session(), current)
 			fmt.Fprintf(os.Stderr, "=> Scopes upgraded successfully\n")
 			return nil
 		}
@@ -4384,6 +4391,7 @@ func authedClient(baseURL string) (FeishuClient, error) {
 	}
 	client := NewGatewayClient(baseURL)
 	client.SetSessionToken(token)
+	client.scopeCachePath = defaultScopeCachePath()
 	return client, nil
 }
 

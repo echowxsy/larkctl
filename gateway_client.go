@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,6 +50,9 @@ type apiEnvelope struct {
 type GatewayClient struct {
 	baseURL    string
 	httpClient *http.Client
+	// scopeCachePath, when set, lets requireScopes skip the gateway round trip
+	// for scopes it already confirmed for this session (see scope_cache.go).
+	scopeCachePath string
 
 	mu           sync.RWMutex
 	sessionToken string
@@ -83,9 +87,31 @@ func NewGatewayClient(baseURL string) *GatewayClient {
 	return &GatewayClient{
 		baseURL: normalizeBaseURL(baseURL),
 		httpClient: &http.Client{
-			Timeout: 45 * time.Second,
+			Timeout:   45 * time.Second,
+			Transport: userAgentTransport{},
 		},
 	}
+}
+
+// userAgent identifies larkctl and its version to the gateway, whose audit log
+// otherwise sees only Go's default and cannot tell which client versions are
+// still in use.
+func userAgent() string {
+	return "larkctl/" + version + " (" + runtime.GOOS + "/" + runtime.GOARCH + ")"
+}
+
+type userAgentTransport struct{ base http.RoundTripper }
+
+func (t userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if req.Header.Get("User-Agent") == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("User-Agent", userAgent())
+	}
+	return base.RoundTrip(req)
 }
 
 // CheckVersion verifies that the gateway supports this client's protocol version.
@@ -1449,7 +1475,7 @@ func (c *GatewayClient) StreamEvents(ctx context.Context, fn func(event, data st
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("X-Client-Version", ProtocolVersion)
 
-	streamClient := &http.Client{} // no Timeout: stream lives until ctx cancel
+	streamClient := &http.Client{Transport: userAgentTransport{}} // no Timeout: stream lives until ctx cancel
 	resp, err := streamClient.Do(req)
 	if err != nil {
 		return err
