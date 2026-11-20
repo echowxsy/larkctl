@@ -1349,8 +1349,9 @@ The JSON body is the Feishu create-blocks request body, e.g.:
 		Long: `Update document content using diff-based approach.
 
 If the markdown contains <!-- bid:xxx --> markers (from docs export --markdown),
-only changed blocks are updated, new blocks are created, and removed blocks are
-deleted. Blocks with no changes are left untouched, preserving their comments.
+only changed blocks are updated, new blocks are created where they appear in the
+markdown (right after the nearest unchanged block above them), and removed blocks
+are deleted. Blocks with no changes are left untouched, preserving their comments.
 
 If no markers are present, falls back to full replace (delete all + create all).
 
@@ -1548,6 +1549,34 @@ func doFullReplace(ctx context.Context, client FeishuClient, docID string, entri
 	return createEntriesRecursive(ctx, client, docID, "", entries)
 }
 
+// createRun is a run of consecutive new markdown entries, to be created right
+// after the page child after ("" = at the top of the page).
+type createRun struct {
+	after   string
+	entries []mdBlockEntry
+}
+
+// fetchPageChildren returns the ids of the page block's children, in order.
+func fetchPageChildren(ctx context.Context, client FeishuClient, docID string) ([]string, error) {
+	data, err := client.GetDocumentBlocks(ctx, docID)
+	if err != nil {
+		return nil, err
+	}
+	bBytes, _ := json.Marshal(data)
+	var resp struct {
+		Items []blockData `json:"items"`
+	}
+	if err := json.Unmarshal(bBytes, &resp); err != nil {
+		return nil, err
+	}
+	for _, item := range resp.Items {
+		if item.BlockType == btPage {
+			return item.Children, nil
+		}
+	}
+	return nil, fmt.Errorf("document %s has no page block", docID)
+}
+
 func doDiffUpdate(ctx context.Context, client FeishuClient, docID string, entries []mdBlockEntry) error {
 	// Get existing blocks for comparison
 	blocksData, err := client.GetDocumentBlocks(ctx, docID)
@@ -1611,11 +1640,23 @@ func doDiffUpdate(ctx context.Context, client FeishuClient, docID string, entrie
 	keepSet := map[string]bool{}
 	var unsupported []string
 
+	pageChildSet := map[string]bool{}
+	for _, id := range pageChildren {
+		pageChildSet[id] = true
+	}
+	// New blocks go right after the nearest kept page child above them in the
+	// markdown. Each run of new entries shares one anchor ("" = top of page).
+	var runs []createRun
+	anchor := ""
+
 	for _, entry := range entries {
 		if entry.BlockID != "" && existingSet[entry.BlockID] {
 			keepSet[entry.BlockID] = true
 			if wrapper, ok := wrapperOf[entry.BlockID]; ok {
 				keepSet[wrapper] = true
+				anchor = wrapper
+			} else if pageChildSet[entry.BlockID] {
+				anchor = entry.BlockID
 			}
 			existingType := existingTypes[entry.BlockID]
 			if existingType != entry.BlockType {
@@ -1642,6 +1683,11 @@ func doDiffUpdate(ctx context.Context, client FeishuClient, docID string, entrie
 				continue
 			}
 			toCreate = append(toCreate, entry)
+			if len(runs) > 0 && runs[len(runs)-1].after == anchor {
+				runs[len(runs)-1].entries = append(runs[len(runs)-1].entries, entry)
+			} else {
+				runs = append(runs, createRun{after: anchor, entries: []mdBlockEntry{entry}})
+			}
 		}
 	}
 
@@ -1683,15 +1729,35 @@ func doDiffUpdate(ctx context.Context, client FeishuClient, docID string, entrie
 		}
 	}
 
-	// 3. Create new blocks (append at end for simplicity)
+	// 3. Create new blocks where they sit in the markdown
 	if len(toCreate) > 0 {
-		var newBlocks []map[string]any
-		for _, e := range toCreate {
-			newBlocks = append(newBlocks, e.Body)
+		fmt.Fprintf(os.Stderr, "=> Creating %d new blocks...\n", len(toCreate))
+		order := pageChildren
+		if len(toDelete) > 0 {
+			// Deletes are best effort, so place against what the page holds now.
+			order, err = fetchPageChildren(ctx, client, docID)
+			if err != nil {
+				return fmt.Errorf("re-read blocks before create: %w", err)
+			}
 		}
-		fmt.Fprintf(os.Stderr, "=> Creating %d new blocks...\n", len(newBlocks))
-		if err := batchCreateBlocks(ctx, client, docID, "", newBlocks); err != nil {
-			return err
+		pos := map[string]int{}
+		for i, id := range order {
+			pos[id] = i
+		}
+		// Last run first: inserting further down never shifts the indexes of
+		// the runs above it.
+		for i := len(runs) - 1; i >= 0; i-- {
+			at := 0
+			if runs[i].after != "" {
+				p, ok := pos[runs[i].after]
+				if !ok {
+					return fmt.Errorf("block %s disappeared before new blocks could be placed after it", runs[i].after)
+				}
+				at = p + 1
+			}
+			if err := createEntriesAt(ctx, client, docID, "", at, runs[i].entries); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1702,58 +1768,71 @@ func doDiffUpdate(ctx context.Context, client FeishuClient, docID string, entrie
 // createEntriesRecursive creates blocks from entries, handling nested children.
 // For entries with children, it creates the parent first, then recursively creates children under it.
 func createEntriesRecursive(ctx context.Context, client FeishuClient, docID, parentBlockID string, entries []mdBlockEntry) error {
-	// Separate entries with children from flat entries
-	var flatBlocks []map[string]any
+	return createEntriesAt(ctx, client, docID, parentBlockID, -1, entries)
+}
 
-	for _, e := range entries {
-		if len(e.Children) > 0 {
-			// Flush flat blocks first
-			if len(flatBlocks) > 0 {
-				if err := batchCreateBlocks(ctx, client, docID, parentBlockID, flatBlocks); err != nil {
-					return err
-				}
-				flatBlocks = nil
-			}
-			// Create parent one-by-one to get its block ID
-			parentBody := []map[string]any{e.Body}
-			createdIDs, err := batchCreateBlocksReturnIDs(ctx, client, docID, parentBlockID, parentBody)
-			if err != nil {
-				return err
-			}
-			if len(createdIDs) > 0 {
-				newParentID := createdIDs[0]
-				children := e.Children
-				// Container blocks (quote_container, callout) auto-create an empty text child.
-				// Update it with first child's content, then create the rest.
-				if isContainerBlock(e.BlockType) && len(children) > 0 {
-					autoChildID := findAutoChild(ctx, client, docID, newParentID)
-					if autoChildID != "" {
-						consumed, err := updateAutoChild(ctx, client, docID, autoChildID, children[0])
-						if err != nil {
-							return err
-						}
-						if consumed {
-							children = children[1:]
-						}
-					}
-				}
-				// Recursively create remaining children under this parent
-				if len(children) > 0 {
-					if err := createEntriesRecursive(ctx, client, docID, newParentID, children); err != nil {
-						return err
-					}
-				}
-			}
-		} else {
-			flatBlocks = append(flatBlocks, e.Body)
+// createEntriesAt creates entries under parentBlockID starting at child
+// position index, in order; index -1 appends. Entries with children are
+// created parent-first so their children can be placed under the new block.
+func createEntriesAt(ctx context.Context, client FeishuClient, docID, parentBlockID string, index int, entries []mdBlockEntry) error {
+	var flatBlocks []map[string]any
+	// advance moves the insertion point past n blocks that were just created.
+	advance := func(n int) {
+		if index >= 0 {
+			index += n
 		}
 	}
-
-	// Flush remaining flat blocks
-	if len(flatBlocks) > 0 {
-		return batchCreateBlocks(ctx, client, docID, parentBlockID, flatBlocks)
+	flush := func() error {
+		if len(flatBlocks) == 0 {
+			return nil
+		}
+		n, err := batchCreateBlocksAt(ctx, client, docID, parentBlockID, index, flatBlocks)
+		advance(n)
+		flatBlocks = nil
+		return err
 	}
-	return nil
+
+	for _, e := range entries {
+		if len(e.Children) == 0 {
+			flatBlocks = append(flatBlocks, e.Body)
+			continue
+		}
+		if err := flush(); err != nil {
+			return err
+		}
+		// Create parent one-by-one to get its block ID
+		createdIDs, err := batchCreateBlocksReturnIDs(ctx, client, docID, parentBlockID, index, []map[string]any{e.Body})
+		if err != nil {
+			return err
+		}
+		if len(createdIDs) == 0 {
+			continue
+		}
+		advance(1)
+		newParentID := createdIDs[0]
+		children := e.Children
+		// Container blocks (quote_container, callout) auto-create an empty text child.
+		// Update it with first child's content, then create the rest.
+		if isContainerBlock(e.BlockType) && len(children) > 0 {
+			autoChildID := findAutoChild(ctx, client, docID, newParentID)
+			if autoChildID != "" {
+				consumed, err := updateAutoChild(ctx, client, docID, autoChildID, children[0])
+				if err != nil {
+					return err
+				}
+				if consumed {
+					children = children[1:]
+				}
+			}
+		}
+		// Recursively create remaining children under this parent
+		if len(children) > 0 {
+			if err := createEntriesAt(ctx, client, docID, newParentID, -1, children); err != nil {
+				return err
+			}
+		}
+	}
+	return flush()
 }
 
 // isContainerBlock returns true for block types where the Feishu API auto-creates an empty child.
@@ -1809,8 +1888,8 @@ func updateAutoChild(ctx context.Context, client FeishuClient, docID, autoChildI
 }
 
 // batchCreateBlocksReturnIDs creates blocks and returns the created block IDs.
-func batchCreateBlocksReturnIDs(ctx context.Context, client FeishuClient, docID, parentBlockID string, blocks []map[string]any) ([]string, error) {
-	body := map[string]any{"children": blocks, "index": -1}
+func batchCreateBlocksReturnIDs(ctx context.Context, client FeishuClient, docID, parentBlockID string, index int, blocks []map[string]any) ([]string, error) {
+	body := map[string]any{"children": blocks, "index": index}
 	data, err := client.CreateDocumentBlocks(ctx, docID, parentBlockID, body)
 	if err != nil && strings.Contains(err.Error(), "429") {
 		time.Sleep(2 * time.Second)
@@ -1836,6 +1915,15 @@ func batchCreateBlocksReturnIDs(ctx context.Context, client FeishuClient, docID,
 }
 
 func batchCreateBlocks(ctx context.Context, client FeishuClient, docID, parentBlockID string, blocks []map[string]any) error {
+	_, err := batchCreateBlocksAt(ctx, client, docID, parentBlockID, -1, blocks)
+	return err
+}
+
+// batchCreateBlocksAt creates blocks in batches of 10 starting at child
+// position index (-1 appends) and returns how many were created. A failed
+// batch is reported and skipped; later batches are placed after the blocks
+// that did land, so the order of what was created is preserved.
+func batchCreateBlocksAt(ctx context.Context, client FeishuClient, docID, parentBlockID string, index int, blocks []map[string]any) (int, error) {
 	batchSize := 10
 	total := 0
 	var lastErr error
@@ -1845,7 +1933,11 @@ func batchCreateBlocks(ctx context.Context, client FeishuClient, docID, parentBl
 			end = len(blocks)
 		}
 		batch := blocks[i:end]
-		body := map[string]any{"children": batch, "index": -1}
+		at := -1
+		if index >= 0 {
+			at = index + total
+		}
+		body := map[string]any{"children": batch, "index": at}
 		data, err := client.CreateDocumentBlocks(ctx, docID, parentBlockID, body)
 		if err != nil && strings.Contains(err.Error(), "429") {
 			time.Sleep(2 * time.Second)
@@ -1864,9 +1956,9 @@ func batchCreateBlocks(ctx context.Context, client FeishuClient, docID, parentBl
 	}
 	fmt.Fprintf(os.Stderr, "=> Created %d blocks\n", total)
 	if lastErr != nil {
-		return fmt.Errorf("some batches failed, last error: %w", lastErr)
+		return total, fmt.Errorf("some batches failed, last error: %w", lastErr)
 	}
-	return nil
+	return total, nil
 }
 
 func entryComparableContent(entry mdBlockEntry) string {
